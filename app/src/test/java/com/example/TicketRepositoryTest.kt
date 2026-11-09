@@ -54,6 +54,13 @@ class TicketRepositoryTest {
     }
 
     @Test
+    fun `duplicate is caught against a code stored with hyphens by an earlier build`() = runBlocking {
+        repository.insertTicket(ticket("1234-5678-90ab"))
+        assertFalse(repository.insertTicketIfNew(ticket("1234567890AB")))
+        assertEquals(1, repository.allTickets.first().size)
+    }
+
+    @Test
     fun `blank entry code is not saved`() = runBlocking {
         assertFalse(repository.insertTicketIfNew(ticket("  ")))
         assertTrue(repository.allTickets.first().isEmpty())

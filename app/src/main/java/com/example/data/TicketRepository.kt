@@ -22,7 +22,7 @@ class TicketRepository(private val ticketDao: TicketDao) {
      */
     suspend fun insertTicketIfNew(ticket: LotteryTicket): Boolean {
         val code = normalizeEntryCode(ticket.entryCode)
-        if (code.isEmpty() || ticketDao.getTicketByCode(code) != null) return false
+        if (code.isEmpty() || ticketDao.getTicketByNormalizedCode(code) != null) return false
         ticketDao.insertTicket(ticket.copy(entryCode = code))
         return true
     }
