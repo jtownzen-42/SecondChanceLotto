@@ -499,7 +499,9 @@ fun BatchSubmissionScreen(
                                         }
                                         // Inconclusive: stop watching, so a later unrelated page can't
                                         // mark this ticket. "Confirm & Next" still marks it by hand.
-                                        PortalResult.UNKNOWN -> awaitingResultForTicketId = null
+                                        PortalResult.UNKNOWN -> {
+                                            awaitingResultForTicketId = null
+                                        }
                                     }
                                 }
                             }
