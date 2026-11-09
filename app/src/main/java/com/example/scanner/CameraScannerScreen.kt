@@ -458,12 +458,11 @@ fun CameraScannerScreen(
                             if (parsedCandidate != null) {
                                 showReviewSheet = true
                             } else {
+                                // Nothing recognized yet: open the review sheet empty so the
+                                // code is typed in, rather than pre-filling a made-up one.
                                 parsedCandidate = ParsedLotteryData(
-                                    gameNumber = "852",
-                                    gameName = "$100,000 Frenzy",
-                                    entryCode = detectedLiveCode ?: "84920158291048",
-                                    drawingDeadline = "Nov 15, 2026",
-                                    isConfident = true
+                                    entryCode = detectedLiveCode ?: "",
+                                    isConfident = detectedLiveCode != null
                                 )
                                 showReviewSheet = true
                             }

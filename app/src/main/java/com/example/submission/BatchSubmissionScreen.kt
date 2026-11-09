@@ -63,6 +63,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,6 +92,7 @@ fun BatchSubmissionScreen(
     pendingTickets: List<LotteryTicket>,
     userPreferences: UserPreferences,
     onTicketSubmitted: (ticketId: Long, confirmation: String?) -> Unit,
+    onTicketDuplicate: (ticketId: Long) -> Unit,
     onConfigureCredentials: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -104,6 +106,13 @@ fun BatchSubmissionScreen(
     var currentWebUrl by remember { mutableStateOf("https://www.illinoislottery.com/second-chance") }
     var lastAutomationStatus by remember { mutableStateOf<String?>(null) }
     var isHudExpanded by remember { mutableStateOf(true) }
+
+    // The ticket whose code was last injected into the portal and whose result we are
+    // waiting to see. The WebView callbacks are created once, so they must read this
+    // state (always current) instead of capturing `currentTicket` (frozen at creation).
+    var awaitingResultForTicketId by remember { mutableStateOf<Long?>(null) }
+    val latestOnTicketSubmitted by rememberUpdatedState(onTicketSubmitted)
+    val latestOnTicketDuplicate by rememberUpdatedState(onTicketDuplicate)
 
     // Reset index if tickets list changes
     LaunchedEffect(pendingTickets.size) {
@@ -255,8 +264,13 @@ fun BatchSubmissionScreen(
                                                 currentTicket.entryCode,
                                                 currentTicket.gameNumber
                                             )
+                                            val ticketId = currentTicket.id
                                             webViewInstance?.evaluateJavascript(js) { result ->
-                                                lastAutomationStatus = result.removeSurrounding("\"")
+                                                val status = result.removeSurrounding("\"")
+                                                lastAutomationStatus = status
+                                                if (status.startsWith("SUCCESS")) {
+                                                    awaitingResultForTicketId = ticketId
+                                                }
                                                 Toast.makeText(context, "Code injected into entry form", Toast.LENGTH_SHORT).show()
                                             }
                                         },
@@ -300,6 +314,7 @@ fun BatchSubmissionScreen(
                                     // Mark Submitted & Advance
                                     Button(
                                         onClick = {
+                                            awaitingResultForTicketId = null
                                             onTicketSubmitted(currentTicket.id, null)
                                             Toast.makeText(context, "Marked as entered! Next ticket queued.", Toast.LENGTH_SHORT).show()
                                         },
@@ -469,10 +484,20 @@ fun BatchSubmissionScreen(
                                 url?.let { currentWebUrl = it }
 
                                 // Check if user successfully submitted code via DOM inspection
+                                // Only acts on a ticket whose code we just injected, so reloading
+                                // a success page can't mark a different ticket as entered.
+                                val ticketId = awaitingResultForTicketId ?: return
                                 evaluateJavascript(SubmissionAutomationHelper.generateCheckSuccessScript()) { result ->
-                                    val status = result.removeSurrounding("\"")
-                                    if (status == "SUBMITTED" && currentTicket != null) {
-                                        onTicketSubmitted(currentTicket.id, null)
+                                    when (SubmissionAutomationHelper.parsePortalResult(result)) {
+                                        PortalResult.SUBMITTED -> {
+                                            awaitingResultForTicketId = null
+                                            latestOnTicketSubmitted(ticketId, null)
+                                        }
+                                        PortalResult.DUPLICATE -> {
+                                            awaitingResultForTicketId = null
+                                            latestOnTicketDuplicate(ticketId)
+                                        }
+                                        PortalResult.UNKNOWN -> Unit
                                     }
                                 }
                             }

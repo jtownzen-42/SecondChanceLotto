@@ -59,13 +59,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val filterGameNumber: StateFlow<String?> = _filterGameNumber.asStateFlow()
 
     init {
+        // Earlier builds seeded fake demo tickets into the database. Remove them so they
+        // can never be submitted as if they were real entries.
         viewModelScope.launch {
-            // Pre-seed sample tickets if brand new app
-            allTickets.collect { list ->
-                if (list.isEmpty()) {
-                    ticketRepository.prepopulateSampleTicketsIfEmpty(0)
-                }
-            }
+            ticketRepository.removeLegacySampleTickets()
         }
     }
 
@@ -73,9 +70,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _currentTab.value = tab
     }
 
-    fun saveTicket(ticket: LotteryTicket) {
+    /**
+     * Saves [ticket] if its entry code is new. [onResult] is called on the main thread
+     * with true when saved, or false when the code was already in the vault.
+     */
+    fun saveTicket(ticket: LotteryTicket, onResult: (saved: Boolean) -> Unit = {}) {
         viewModelScope.launch {
-            ticketRepository.insertTicket(ticket)
+            onResult(ticketRepository.insertTicketIfNew(ticket))
         }
     }
 
@@ -88,6 +89,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun markTicketSubmitted(id: Long, confirmationCode: String? = null) {
         viewModelScope.launch {
             ticketRepository.markSubmitted(id, confirmationCode)
+        }
+    }
+
+    fun markTicketStatus(id: Long, status: TicketStatus) {
+        viewModelScope.launch {
+            ticketRepository.markStatus(id, status)
         }
     }
 

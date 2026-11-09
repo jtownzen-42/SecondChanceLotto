@@ -68,6 +68,9 @@ interface TicketDao {
     @Query("DELETE FROM lottery_tickets WHERE status = :status")
     suspend fun deleteTicketsByStatus(status: TicketStatus): Int
 
+    @Query("DELETE FROM lottery_tickets WHERE entryCode IN (:codes)")
+    suspend fun deleteTicketsByCodes(codes: List<String>): Int
+
     @Query("DELETE FROM lottery_tickets")
     suspend fun deleteAllTickets(): Int
 }
