@@ -1,0 +1,6 @@
+{
+  "name": "SecondChance IL",
+  "description": "Scan Illinois instant lottery tickets, extract second chance entry codes with OCR, and automate batch submissions into your Illinois Lottery account.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

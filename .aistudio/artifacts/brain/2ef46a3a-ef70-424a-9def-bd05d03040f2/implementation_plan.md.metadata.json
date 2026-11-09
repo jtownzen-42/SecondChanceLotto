@@ -1,0 +1,6 @@
+{
+  "summary": "Implementation plan for SecondChance IL, an Android app for scanning Illinois instant lottery tickets, extracting second-chance entry codes with OCR, organizing tickets by game and drawing deadlines, and batch-submitting entries via an embedded secure browser with automated autofill.",
+  "updatedAt": "2026-11-05T06:10:39.553112467Z",
+  "requestFeedback": true,
+  "userFacing": true
+}
