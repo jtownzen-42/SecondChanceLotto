@@ -1,0 +1,51 @@
+name: Android build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+
+      # The repo has no gradlew yet, so use the Gradle version the wrapper properties pin.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 9.3.1
+
+      # Debug builds are signed with ./debug.keystore (gitignored), so make a throwaway one.
+      - name: Create debug keystore
+        run: >
+          keytool -genkeypair -v -keystore debug.keystore -storepass android
+          -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048
+          -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Build debug APK
+        run: gradle assembleDebug --stacktrace
+
+      - name: Unit tests
+        run: gradle testDebugUnitTest
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: app/build/reports/tests/
+
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: app/build/outputs/apk/debug/*.apk
