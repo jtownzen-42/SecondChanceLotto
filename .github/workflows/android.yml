@@ -16,7 +16,9 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - uses: android-actions/setup-android@v3
+      # The ubuntu runner already ships the Android SDK (ANDROID_HOME) with licenses accepted;
+      # AGP downloads the platform it needs. android-actions/setup-android@v3 fails here
+      # because it asks for the removed 'tools' package.
 
       # The repo has no gradlew yet, so use the Gradle version the wrapper properties pin.
       - uses: gradle/actions/setup-gradle@v4
