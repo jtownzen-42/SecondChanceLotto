@@ -15,6 +15,18 @@ class TicketRepository(private val ticketDao: TicketDao) {
     suspend fun insertTicket(ticket: LotteryTicket): Long =
         ticketDao.insertTicket(ticket)
 
+    /**
+     * Saves [ticket] unless a ticket with the same entry code is already stored.
+     * Codes are compared after removing spaces and hyphens, case-insensitively.
+     * Returns false when the code is a duplicate and nothing was saved.
+     */
+    suspend fun insertTicketIfNew(ticket: LotteryTicket): Boolean {
+        val code = normalizeEntryCode(ticket.entryCode)
+        if (code.isEmpty() || ticketDao.getTicketByNormalizedCode(code) != null) return false
+        ticketDao.insertTicket(ticket.copy(entryCode = code))
+        return true
+    }
+
     suspend fun insertTickets(tickets: List<LotteryTicket>) =
         ticketDao.insertTickets(tickets)
 
@@ -32,7 +44,8 @@ class TicketRepository(private val ticketDao: TicketDao) {
             id = id,
             status = TicketStatus.SUBMITTED,
             submittedTime = System.currentTimeMillis(),
-            confirmation = confirmationCode ?: generateConfirmationCode()
+            // Only store a receipt the lottery site actually gave us; never invent one.
+            confirmation = confirmationCode
         )
     }
 
@@ -45,66 +58,23 @@ class TicketRepository(private val ticketDao: TicketDao) {
         )
     }
 
+    suspend fun removeLegacySampleTickets() {
+        ticketDao.deleteTicketsByCodes(LEGACY_SAMPLE_CODES)
+    }
+
     suspend fun clearSubmitted() {
         ticketDao.deleteTicketsByStatus(TicketStatus.SUBMITTED)
     }
-
-    suspend fun prepopulateSampleTicketsIfEmpty(currentCount: Int) {
-        if (currentCount > 0) return
-
-        val sampleTickets = listOf(
-            LotteryTicket(
-                gameNumber = "852",
-                gameName = "$100,000 Frenzy",
-                packNumber = "04821",
-                ticketNumber = "014",
-                entryCode = "84920158291048",
-                status = TicketStatus.PENDING,
-                drawingDeadline = "Nov 15, 2026",
-                expirationDate = "Nov 15, 2026",
-                notes = "Sample Illinois instant scratch-off ready for submission"
-            ),
-            LotteryTicket(
-                gameNumber = "852",
-                gameName = "$100,000 Frenzy",
-                packNumber = "04821",
-                ticketNumber = "015",
-                entryCode = "84920158291049",
-                status = TicketStatus.PENDING,
-                drawingDeadline = "Nov 15, 2026",
-                expirationDate = "Nov 15, 2026",
-                notes = "Consecutive ticket non-winner"
-            ),
-            LotteryTicket(
-                gameNumber = "777",
-                gameName = "Triple 777 Jackpot",
-                packNumber = "12903",
-                ticketNumber = "003",
-                entryCode = "77301948271603",
-                status = TicketStatus.PENDING,
-                drawingDeadline = "Nov 22, 2026",
-                expirationDate = "Nov 22, 2026",
-                notes = "Gas station purchase - second chance draw"
-            ),
-            LotteryTicket(
-                gameNumber = "914",
-                gameName = "Holiday Bonus Spectacular",
-                packNumber = "00842",
-                ticketNumber = "022",
-                entryCode = "91450293817264",
-                status = TicketStatus.SUBMITTED,
-                dateSubmitted = System.currentTimeMillis() - 86400000L * 2,
-                confirmationCode = "IL-2ND-914820",
-                drawingDeadline = "Dec 05, 2026",
-                expirationDate = "Dec 05, 2026",
-                notes = "Submitted successfully into Holiday draw"
-            )
-        )
-        ticketDao.insertTickets(sampleTickets)
-    }
-
-    private fun generateConfirmationCode(): String {
-        val rand = (100000..999999).random()
-        return "IL-2ND-$rand"
-    }
 }
+
+/** Entry codes of the demo tickets that earlier builds inserted on first launch. */
+private val LEGACY_SAMPLE_CODES = listOf(
+    "84920158291048",
+    "84920158291049",
+    "77301948271603",
+    "91450293817264"
+)
+
+/** Strips spaces and hyphens and upper-cases an entry code so equal codes compare equal. */
+fun normalizeEntryCode(code: String): String =
+    code.filterNot { it == ' ' || it == '-' }.uppercase()

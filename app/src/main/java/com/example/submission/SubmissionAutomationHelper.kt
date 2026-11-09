@@ -1,6 +1,20 @@
 package com.example.submission
 
+/** What the portal page says after an entry code was submitted. */
+enum class PortalResult { SUBMITTED, DUPLICATE, UNKNOWN }
+
 object SubmissionAutomationHelper {
+
+    /**
+     * Maps the raw value returned by `evaluateJavascript` for [generateCheckSuccessScript]
+     * (a JSON string such as `"SUBMITTED"`, or `null`) to a [PortalResult].
+     */
+    fun parsePortalResult(rawJsResult: String?): PortalResult =
+        when (rawJsResult?.trim()?.removeSurrounding("\"")) {
+            "SUBMITTED" -> PortalResult.SUBMITTED
+            "DUPLICATE" -> PortalResult.DUPLICATE
+            else -> PortalResult.UNKNOWN
+        }
 
     fun generateLoginScript(email: String, pass: String): String {
         val safeEmail = escapeJsString(email)

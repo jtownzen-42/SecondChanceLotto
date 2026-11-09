@@ -42,6 +42,13 @@ interface TicketDao {
     @Query("SELECT * FROM lottery_tickets WHERE entryCode = :entryCode LIMIT 1")
     suspend fun getTicketByCode(entryCode: String): LotteryTicket?
 
+    /**
+     * Looks up a ticket by an already-normalized code, normalizing the stored value the same
+     * way, so codes saved with spaces or hyphens by earlier builds still match.
+     */
+    @Query("SELECT * FROM lottery_tickets WHERE UPPER(REPLACE(REPLACE(entryCode, ' ', ''), '-', '')) = :normalizedCode LIMIT 1")
+    suspend fun getTicketByNormalizedCode(normalizedCode: String): LotteryTicket?
+
     @Query("SELECT COUNT(*) FROM lottery_tickets WHERE status = :status")
     fun getCountByStatus(status: TicketStatus): Flow<Int>
 
@@ -67,6 +74,9 @@ interface TicketDao {
 
     @Query("DELETE FROM lottery_tickets WHERE status = :status")
     suspend fun deleteTicketsByStatus(status: TicketStatus): Int
+
+    @Query("DELETE FROM lottery_tickets WHERE entryCode IN (:codes)")
+    suspend fun deleteTicketsByCodes(codes: List<String>): Int
 
     @Query("DELETE FROM lottery_tickets")
     suspend fun deleteAllTickets(): Int

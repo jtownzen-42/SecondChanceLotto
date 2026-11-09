@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.data.TicketStatus
 import com.example.scanner.CameraScannerScreen
 import com.example.submission.BatchSubmissionScreen
 import com.example.ui.AccountSettingsDialog
@@ -270,9 +271,14 @@ fun SecondChanceApp(
                 AppTab.SCANNER -> {
                     CameraScannerScreen(
                         onTicketSaved = { ticket ->
-                            viewModel.saveTicket(ticket)
-                            Toast.makeText(context, "Ticket added to batch queue!", Toast.LENGTH_SHORT).show()
-                            viewModel.setTab(AppTab.DASHBOARD)
+                            viewModel.saveTicket(ticket) { saved ->
+                                if (saved) {
+                                    Toast.makeText(context, "Ticket added to batch queue!", Toast.LENGTH_SHORT).show()
+                                    viewModel.setTab(AppTab.DASHBOARD)
+                                } else {
+                                    Toast.makeText(context, "That entry code is already in your vault", Toast.LENGTH_LONG).show()
+                                }
+                            }
                         },
                         onManualEntryRequested = {
                             showManualEntryDialog = true
@@ -286,6 +292,9 @@ fun SecondChanceApp(
                         userPreferences = userPreferences,
                         onTicketSubmitted = { ticketId, conf ->
                             viewModel.markTicketSubmitted(ticketId, conf)
+                        },
+                        onTicketDuplicate = { ticketId ->
+                            viewModel.markTicketStatus(ticketId, TicketStatus.DUPLICATE)
                         },
                         onConfigureCredentials = {
                             showAccountSettingsDialog = true
@@ -311,8 +320,10 @@ fun SecondChanceApp(
                 initialGameNumber = manualEntryInitialGame,
                 onDismiss = { showManualEntryDialog = false },
                 onSaveTicket = { ticket ->
-                    viewModel.saveTicket(ticket)
-                    Toast.makeText(context, "Saved to submission batch!", Toast.LENGTH_SHORT).show()
+                    viewModel.saveTicket(ticket) { saved ->
+                        val message = if (saved) "Saved to submission batch!" else "That entry code is already in your vault"
+                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                    }
                 }
             )
         }
