@@ -88,6 +88,20 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun printedGameLabel_beatsTitleWhenPackAndTicketMissing() {
+        // The 2025 crossword has the same title as eligible 7665; the printed number must win.
+        val rawOcr = """
+            ${'$'}1,000,000 CROSSWORD 50X
+            GAME 7639
+        """.trimIndent()
+
+        val parsed = LotteryCodeParser.parse(rawOcr)
+
+        assertEquals("7639", parsed.gameNumber)
+        assertEquals("No open 2nd Chance promotion", parsed.drawingDeadline)
+    }
+
+    @Test
     fun findGameInText_prefersLongestTitleAndOpenPromotion() {
         // "$100,000 Crossword" is contained in "$1,000,000 Crossword 50X"; the longer title must win,
         // and the 2026 game (open promotion) beats the 2025 game with the same name.
