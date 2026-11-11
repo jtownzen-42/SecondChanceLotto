@@ -177,11 +177,9 @@ object LotteryCodeParser {
         var entryCode = ""
 
         // 1. Check if a known game's full title appears in the text (longest title wins)
+        // Kept separate from gameNum so a printed "GAME ####" is still parsed below and can override it.
         val titleGame = IllinoisLotteryGames.findGameInText(rawText)
-        if (titleGame != null) {
-            detectedGame = titleGame
-            gameNum = titleGame.gameNumber
-        }
+        detectedGame = titleGame
 
         // 2. Check for GAME-PACK-TICKET formatted string e.g., "7676-04821-014" or "GAME 7676 - PACK 04821 - TICKET 014"
         val gamePackTicketRegex = Regex("""(?i)\b(?:game\s*[:#]?\s*)?(\d{3,4})[\s\-]+(?:pack\s*[:#]?\s*)?(\d{5})[\s\-]+(?:ticket\s*[:#]?\s*)?(\d{3})\b""")
