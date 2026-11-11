@@ -51,8 +51,8 @@ class ExampleRobolectricTest {
     fun `room database CRUD operations on lottery ticket entity`() = runBlocking {
         // 1. CREATE
         val ticket = LotteryTicket(
-            gameName = "${'$'}100,000 Frenzy",
-            gameNumber = "852",
+            gameName = "Reindeer Riches",
+            gameNumber = "7676",
             entryCode = "84920158291048",
             status = TicketStatus.PENDING,
             expirationDate = "Nov 15, 2026",
@@ -64,7 +64,7 @@ class ExampleRobolectricTest {
         // 2. READ
         val fetched = ticketDao.getTicketById(id)
         assertNotNull(fetched)
-        assertEquals("${'$'}100,000 Frenzy", fetched?.gameName)
+        assertEquals("Reindeer Riches", fetched?.gameName)
         assertEquals("84920158291048", fetched?.entryCode)
         assertEquals(TicketStatus.PENDING, fetched?.status)
         assertEquals("Nov 15, 2026", fetched?.expirationDate)

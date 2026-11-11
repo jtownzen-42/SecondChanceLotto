@@ -176,20 +176,14 @@ object LotteryCodeParser {
         var ticketNum = ""
         var entryCode = ""
 
-        // 1. Check if known game titles appear in the text
-        for (game in IllinoisLotteryGames.activeGames) {
-            val titleWords = game.title.lowercase().split(" ")
-            val containsTitle = titleWords.any { word ->
-                word.length > 3 && rawText.lowercase().contains(word)
-            }
-            if (containsTitle) {
-                detectedGame = game
-                gameNum = game.gameNumber
-                break
-            }
+        // 1. Check if a known game's full title appears in the text (longest title wins)
+        val titleGame = IllinoisLotteryGames.findGameInText(rawText)
+        if (titleGame != null) {
+            detectedGame = titleGame
+            gameNum = titleGame.gameNumber
         }
 
-        // 2. Check for GAME-PACK-TICKET formatted string e.g., "852-04821-014" or "GAME 852 - PACK 04821 - TICKET 014"
+        // 2. Check for GAME-PACK-TICKET formatted string e.g., "7676-04821-014" or "GAME 7676 - PACK 04821 - TICKET 014"
         val gamePackTicketRegex = Regex("""(?i)\b(?:game\s*[:#]?\s*)?(\d{3,4})[\s\-]+(?:pack\s*[:#]?\s*)?(\d{5})[\s\-]+(?:ticket\s*[:#]?\s*)?(\d{3})\b""")
         val gamePackTicketMatch = gamePackTicketRegex.find(rawText)
         if (gamePackTicketMatch != null) {
@@ -219,6 +213,15 @@ object LotteryCodeParser {
                     }
                 }
             }
+        }
+
+        // A printed game number that matches a known game beats the title guess; an unknown
+        // number (often an OCR slip) yields to the title match.
+        val numberGame = if (gameNum.isNotEmpty()) IllinoisLotteryGames.findGameByNumber(gameNum) else null
+        if (numberGame != null) {
+            detectedGame = numberGame
+        } else if (titleGame != null) {
+            gameNum = titleGame.gameNumber
         }
 
         // 3. Search for Entry Code (10 to 14 characters)
@@ -275,7 +278,7 @@ object LotteryCodeParser {
         // Check if game number wasn't found yet
         if (gameNum.isEmpty()) {
             for (line in lines) {
-                val match = Regex("""\b(\d{3,4})\b""").find(line)
+                val match = Regex("""\b(\d{4})\b""").find(line)
                 if (match != null) {
                     val potentialGame = IllinoisLotteryGames.findGameByNumber(match.value)
                     if (potentialGame != null) {

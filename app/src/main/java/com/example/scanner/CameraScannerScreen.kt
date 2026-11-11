@@ -542,8 +542,9 @@ fun TicketReviewSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    var selectedGameNumber by remember { mutableStateOf(initialData.gameNumber.ifEmpty { "852" }) }
-    var selectedGameTitle by remember { mutableStateOf(initialData.gameName.ifEmpty { "$100,000 Frenzy" }) }
+    // No made-up default: if the scan didn't recognise the game, the user must pick it.
+    var selectedGameNumber by remember { mutableStateOf(initialData.gameNumber) }
+    var selectedGameTitle by remember { mutableStateOf(initialData.gameName) }
     var packNumber by remember { mutableStateOf(initialData.packNumber) }
     var ticketNumber by remember { mutableStateOf(initialData.ticketNumber) }
     var entryCode by remember { mutableStateOf(initialData.entryCode) }
@@ -630,11 +631,23 @@ fun TicketReviewSheet(
 
             // Game Selection Dropdown
             Box(modifier = Modifier.fillMaxWidth()) {
+                val knownGame = IllinoisLotteryGames.findGameByNumber(selectedGameNumber)
                 OutlinedTextField(
-                    value = "$selectedGameTitle (#$selectedGameNumber)",
+                    value = if (selectedGameNumber.isBlank()) "Select the game on your ticket" else "$selectedGameTitle (#$selectedGameNumber)",
                     onValueChange = {},
                     readOnly = true,
                     label = { Text("Illinois Instant Game") },
+                    isError = knownGame?.isSecondChanceEligible != true,
+                    supportingText = {
+                        Text(
+                            when {
+                                selectedGameNumber.isBlank() -> "Game not recognised. Pick it from the list."
+                                knownGame == null -> "Game #$selectedGameNumber isn't a known Illinois game. Pick it from the list."
+                                knownGame.promotion == null -> "This game has no open 2nd Chance promotion."
+                                else -> "${knownGame.promotion.name} • enter by ${knownGame.promotion.finalEntryDeadline}"
+                            }
+                        )
+                    },
                     trailingIcon = {
                         IconButton(onClick = { gameDropdownExpanded = true }) {
                             Icon(Icons.Default.ArrowDropDown, contentDescription = null)
@@ -656,7 +669,7 @@ fun TicketReviewSheet(
                                 Column {
                                     Text(game.title, fontWeight = FontWeight.Bold)
                                     Text(
-                                        "Game #${game.gameNumber} • ${game.ticketPrice} • Due ${game.drawingDeadline}",
+                                        "Game #${game.gameNumber} • ${game.ticketPrice} • ${game.promotion?.name} • enter by ${game.drawingDeadline}",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                 }
@@ -721,7 +734,8 @@ fun TicketReviewSheet(
                     )
                     onSave(ticket)
                 },
-                enabled = entryCode.isNotBlank(),
+                enabled = entryCode.isNotBlank() &&
+                    IllinoisLotteryGames.findGameByNumber(selectedGameNumber)?.isSecondChanceEligible == true,
                 colors = ButtonDefaults.buttonColors(containerColor = LotteryEmerald),
                 modifier = Modifier.fillMaxWidth().height(52.dp).testTag("save_ticket_to_batch_button")
             ) {

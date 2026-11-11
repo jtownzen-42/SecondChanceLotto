@@ -53,7 +53,8 @@ fun ManualEntryDialog(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    val defaultGame = initialGameNumber?.let { IllinoisLotteryGames.findGameByNumber(it) }
+    // Only games with an open 2nd Chance promotion can be entered.
+    val defaultGame = IllinoisLotteryGames.activeGames.find { it.gameNumber == initialGameNumber?.trim() }
         ?: IllinoisLotteryGames.activeGames.first()
 
     var selectedGameNumber by remember { mutableStateOf(defaultGame.gameNumber) }
@@ -159,7 +160,7 @@ fun ManualEntryDialog(
                                 Column {
                                     Text(game.title, fontWeight = FontWeight.Bold)
                                     Text(
-                                        "Game #${game.gameNumber} • ${game.ticketPrice} • Drawing ${game.drawingDeadline}",
+                                        "Game #${game.gameNumber} • ${game.ticketPrice} • ${game.promotion?.name} • enter by ${game.drawingDeadline}",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                 }

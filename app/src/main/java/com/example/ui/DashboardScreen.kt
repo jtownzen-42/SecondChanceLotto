@@ -413,7 +413,7 @@ fun GamePromotionCard(
                         Spacer(modifier = Modifier.width(4.dp))
                         Column(horizontalAlignment = Alignment.End) {
                             Text(
-                                text = "Due: ${game.drawingDeadline}",
+                                text = "Enter by ${game.drawingDeadline}",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.SemiBold
                             )
