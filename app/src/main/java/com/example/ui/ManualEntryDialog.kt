@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import com.example.data.IllinoisLotteryGames
 import com.example.data.LotteryTicket
 import com.example.data.TicketStatus
+import com.example.scanner.LotteryCodeParser
 import com.example.ui.theme.LotteryEmerald
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -65,6 +66,7 @@ fun ManualEntryDialog(
     var ticketNumber by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
     var gameDropdownExpanded by remember { mutableStateOf(false) }
+    var confirmUnusualCode by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -103,31 +105,10 @@ fun ManualEntryDialog(
             Spacer(modifier = Modifier.height(16.dp))
 
             // Entry Code Input (Required)
-            OutlinedTextField(
+            EntryCodeField(
                 value = entryCode,
-                onValueChange = { entryCode = it.replace(" ", "").replace("-", "").uppercase() },
-                label = { Text("Second Chance Entry Code (10-14 Characters)*") },
-                placeholder = { Text("e.g. 84920158291048") },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("manual_entry_code_input"),
-                textStyle = MaterialTheme.typography.titleMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    color = LotteryEmerald
-                ),
-                singleLine = true,
-                isError = entryCode.isNotEmpty() && entryCode.length !in 10..14,
-                supportingText = {
-                    Text(
-                        text = when {
-                            entryCode.isEmpty() -> "Found under the scratch-off play or validation area"
-                            entryCode.length in 10..14 -> "Valid length (${entryCode.length} digits)"
-                            else -> "Entry code must be between 10 and 14 characters"
-                        },
-                        color = if (entryCode.length in 10..14) LotteryEmerald else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                onValueChange = { entryCode = it },
+                modifier = Modifier.testTag("manual_entry_code_input")
             )
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -211,23 +192,35 @@ fun ManualEntryDialog(
 
             Spacer(modifier = Modifier.height(24.dp))
 
+            val saveTicket = {
+                val ticket = LotteryTicket(
+                    gameNumber = selectedGameNumber,
+                    gameName = selectedGameTitle,
+                    packNumber = packNumber,
+                    ticketNumber = ticketNumber,
+                    entryCode = entryCode,
+                    drawingDeadline = drawingDeadline,
+                    expirationDate = drawingDeadline,
+                    status = TicketStatus.PENDING,
+                    notes = notes
+                )
+                onSaveTicket(ticket)
+                onDismiss()
+            }
+
+            if (confirmUnusualCode) {
+                ConfirmUnusualCodeDialog(
+                    code = entryCode,
+                    onConfirm = { confirmUnusualCode = false; saveTicket() },
+                    onDismiss = { confirmUnusualCode = false }
+                )
+            }
+
             Button(
                 onClick = {
-                    val ticket = LotteryTicket(
-                        gameNumber = selectedGameNumber,
-                        gameName = selectedGameTitle,
-                        packNumber = packNumber,
-                        ticketNumber = ticketNumber,
-                        entryCode = entryCode,
-                        drawingDeadline = drawingDeadline,
-                        expirationDate = drawingDeadline,
-                        status = TicketStatus.PENDING,
-                        notes = notes
-                    )
-                    onSaveTicket(ticket)
-                    onDismiss()
+                    if (LotteryCodeParser.isValidEntryCode(entryCode)) saveTicket() else confirmUnusualCode = true
                 },
-                enabled = entryCode.length in 10..14,
+                enabled = entryCode.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(containerColor = LotteryEmerald),
                 modifier = Modifier
                     .fillMaxWidth()
