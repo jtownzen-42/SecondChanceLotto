@@ -50,6 +50,8 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.Button
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -134,6 +136,48 @@ fun BatchSubmissionScreen(
         }
     }
 
+    // After a ticket is done, go straight back to Enter Your Tickets for the next one.
+    fun openEntryFormForNextTicket(finishedTicketId: Long) {
+        if (pendingTickets.any { it.id != finishedTicketId }) {
+            webViewInstance?.loadUrl(IllinoisLotteryGames.SECOND_CHANCE_ENTER_URL)
+        }
+    }
+
+    // A ticket is only marked entered when the site itself says the entry went in.
+    // Returns true when the result was conclusive (the ticket is no longer being watched).
+    fun handlePortalResult(ticketId: Long, result: PortalResult): Boolean {
+        if (awaitingResultForTicketId != ticketId) return true
+        return when (result) {
+            PortalResult.SUBMITTED -> {
+                awaitingResultForTicketId = null
+                completedInSessionCount++
+                lastAutomationStatus = "ENTERED: the site accepted this entry"
+                latestOnTicketSubmitted(ticketId, null)
+                Toast.makeText(context, "Entry accepted by the 2nd Chance Zone", Toast.LENGTH_SHORT).show()
+                openEntryFormForNextTicket(ticketId)
+                true
+            }
+            PortalResult.DUPLICATE -> {
+                awaitingResultForTicketId = null
+                completedInSessionCount++
+                lastAutomationStatus = "DUPLICATE: the site says this code was already entered"
+                latestOnTicketDuplicate(ticketId)
+                Toast.makeText(context, "Already entered before. Moved to Duplicates.", Toast.LENGTH_LONG).show()
+                openEntryFormForNextTicket(ticketId)
+                true
+            }
+            PortalResult.REJECTED -> {
+                awaitingResultForTicketId = null
+                lastAutomationStatus = "NOT ENTERED: the site rejected the entry. Ticket stays in the queue."
+                Toast.makeText(context, "The site didn't accept this entry. It's still in your queue.", Toast.LENGTH_LONG).show()
+                true
+            }
+            PortalResult.UNKNOWN -> false
+        }
+    }
+
+    val latestHandlePortalResult by rememberUpdatedState(::handlePortalResult)
+
     // Poll DOM for SPA / XHR submission results that don't trigger a full page reload
     LaunchedEffect(awaitingResultForTicketId) {
         val targetId = awaitingResultForTicketId ?: return@LaunchedEffect
@@ -144,23 +188,15 @@ fun BatchSubmissionScreen(
             val wv = webViewInstance ?: break
             val isLastAttempt = attempt == maxAttempts
             wv.evaluateJavascript(SubmissionAutomationHelper.generateCheckSuccessScript()) { result ->
-                if (awaitingResultForTicketId != targetId) return@evaluateJavascript
-                when (SubmissionAutomationHelper.parsePortalResult(result)) {
-                    PortalResult.SUBMITTED -> {
-                        awaitingResultForTicketId = null
-                        completedInSessionCount++
-                        latestOnTicketSubmitted(targetId, null)
-                    }
-                    PortalResult.DUPLICATE -> {
-                        awaitingResultForTicketId = null
-                        completedInSessionCount++
-                        latestOnTicketDuplicate(targetId)
-                    }
-                    PortalResult.UNKNOWN -> {
-                        if (isLastAttempt) {
-                            awaitingResultForTicketId = null
-                        }
-                    }
+                val conclusive = handlePortalResult(targetId, SubmissionAutomationHelper.parsePortalResult(result))
+                if (!conclusive && isLastAttempt && awaitingResultForTicketId == targetId) {
+                    awaitingResultForTicketId = null
+                    lastAutomationStatus = "UNCONFIRMED: no confirmation from the site. Ticket stays in the queue."
+                    Toast.makeText(
+                        context,
+                        "No confirmation from the site, so the ticket stays in your queue. Check My Entries.",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             }
         }
@@ -216,7 +252,8 @@ fun BatchSubmissionScreen(
             val message = when {
                 status.startsWith("SUCCESS") -> {
                     awaitingResultForTicketId = ticket.id
-                    status.removePrefix("SUCCESS: ")
+                    lastAutomationStatus = "WAITING: submitted, waiting for the site to confirm…"
+                    "Submitted. Waiting for the site to confirm…"
                 }
                 status.startsWith("NO_GAME") -> status.removePrefix("NO_GAME: ")
                 status.startsWith("NO_CODE_BOX") -> status.removePrefix("NO_CODE_BOX: ") + " (code copied)"
@@ -228,6 +265,34 @@ fun BatchSubmissionScreen(
             Toast.makeText(context, message, Toast.LENGTH_LONG).show()
         }
     }
+    // "Confirm & Next" marks a ticket entered by hand, so it asks first.
+    var confirmManualEntryFor by remember { mutableStateOf<LotteryTicket?>(null) }
+    confirmManualEntryFor?.let { ticket ->
+        AlertDialog(
+            onDismissRequest = { confirmManualEntryFor = null },
+            title = { Text("Mark as entered?") },
+            text = {
+                Text(
+                    "Only do this if the 2nd Chance Zone showed that ${ticket.formattedCode} was accepted " +
+                        "(it's listed under My Entries). Otherwise use Skip to move on and keep it in the queue."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmManualEntryFor = null
+                    awaitingResultForTicketId = null
+                    completedInSessionCount++
+                    onTicketSubmitted(ticket.id, null)
+                    Toast.makeText(context, "Marked as entered.", Toast.LENGTH_SHORT).show()
+                    openEntryFormForNextTicket(ticket.id)
+                }) { Text("Yes, it was accepted") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmManualEntryFor = null }) { Text("Cancel") }
+            }
+        )
+    }
+
     val currentPromotion = remember(currentTicket?.gameNumber) {
         currentTicket?.let { IllinoisLotteryGames.findGameByNumber(it.gameNumber)?.promotion }
     }
@@ -446,12 +511,7 @@ fun BatchSubmissionScreen(
 
                                     // Mark Submitted & Advance
                                     Button(
-                                        onClick = {
-                                            awaitingResultForTicketId = null
-                                            completedInSessionCount++
-                                            onTicketSubmitted(currentTicket.id, null)
-                                            Toast.makeText(context, "Marked as entered! Next ticket queued.", Toast.LENGTH_SHORT).show()
-                                        },
+                                        onClick = { confirmManualEntryFor = currentTicket },
                                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
                                         contentPadding = PaddingValues(horizontal = 10.dp),
                                         modifier = Modifier
@@ -477,7 +537,7 @@ fun BatchSubmissionScreen(
                                     Text(
                                         text = lastAutomationStatus ?: "",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = if (lastAutomationStatus?.contains("SUCCESS") == true) LotteryEmerald else LuckyGold,
+                                        color = if (lastAutomationStatus?.let { it.startsWith("ENTERED") || it.startsWith("WAITING") } == true) LotteryEmerald else LuckyGold,
                                         fontFamily = FontFamily.Monospace,
                                         maxLines = 1
                                     )
@@ -689,25 +749,9 @@ fun BatchSubmissionScreen(
                                 // Only acts on a ticket whose code we just injected, so reloading
                                 // a success page can't mark a different ticket as entered.
                                 val ticketId = awaitingResultForTicketId ?: return
+                                // Inconclusive results keep watching; the poll above gives up after ~30 s.
                                 evaluateJavascript(SubmissionAutomationHelper.generateCheckSuccessScript()) { result ->
-                                    if (awaitingResultForTicketId != ticketId) return@evaluateJavascript
-                                    when (SubmissionAutomationHelper.parsePortalResult(result)) {
-                                        PortalResult.SUBMITTED -> {
-                                            awaitingResultForTicketId = null
-                                            completedInSessionCount++
-                                            latestOnTicketSubmitted(ticketId, null)
-                                        }
-                                        PortalResult.DUPLICATE -> {
-                                            awaitingResultForTicketId = null
-                                            completedInSessionCount++
-                                            latestOnTicketDuplicate(ticketId)
-                                        }
-                                        // Inconclusive: stop watching on page load, so a later unrelated page can't
-                                        // mark this ticket. "Confirm & Next" still marks it by hand.
-                                        PortalResult.UNKNOWN -> {
-                                            awaitingResultForTicketId = null
-                                        }
-                                    }
+                                    latestHandlePortalResult(ticketId, SubmissionAutomationHelper.parsePortalResult(result))
                                 }
                             }
                         }

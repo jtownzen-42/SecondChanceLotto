@@ -1,7 +1,16 @@
 package com.example.submission
 
 /** What the portal page says after an entry code was submitted. */
-enum class PortalResult { SUBMITTED, DUPLICATE, UNKNOWN }
+enum class PortalResult {
+    /** The site confirmed the entry. */
+    SUBMITTED,
+    /** The site says this code was already entered. */
+    DUPLICATE,
+    /** The site showed an error (empty field, invalid code, wrong game...); nothing was entered. */
+    REJECTED,
+    /** Nothing conclusive on the page yet. */
+    UNKNOWN
+}
 
 object SubmissionAutomationHelper {
 
@@ -25,6 +34,7 @@ object SubmissionAutomationHelper {
         when (unquoteJsString(rawJsResult)) {
             "SUBMITTED" -> PortalResult.SUBMITTED
             "DUPLICATE" -> PortalResult.DUPLICATE
+            "REJECTED" -> PortalResult.REJECTED
             else -> PortalResult.UNKNOWN
         }
 
@@ -276,17 +286,29 @@ object SubmissionAutomationHelper {
     fun generateCheckSuccessScript(): String {
         return """
             (function() {
-                var bodyText = document.body ? document.body.innerText.toLowerCase() : "";
-                var isSuccess = bodyText.includes("entry received") || 
-                                bodyText.includes("successfully entered") || 
-                                bodyText.includes("entry confirmed") ||
-                                bodyText.includes("thank you for your entry");
-                                
-                var isDuplicate = bodyText.includes("already been entered") || 
+                // Only the visible page text counts; FAQ answers in collapsed sections are ignored.
+                var bodyText = document.body ? (document.body.innerText || "").toLowerCase() : "";
+                var isDuplicate = bodyText.includes("already been entered") ||
+                                  bodyText.includes("already been submitted") ||
                                   bodyText.includes("duplicate entry");
-                                  
-                if (isSuccess) return "SUBMITTED";
+                var isRejected = bodyText.includes("please completely fill out") ||
+                                 bodyText.includes("invalid entry code") ||
+                                 bodyText.includes("entry code is invalid") ||
+                                 bodyText.includes("not a valid") ||
+                                 bodyText.includes("is not eligible") ||
+                                 bodyText.includes("could not be processed") ||
+                                 bodyText.includes("daily entry limit");
+                var isSuccess = bodyText.includes("entry received") ||
+                                bodyText.includes("successfully entered") ||
+                                bodyText.includes("successfully submitted") ||
+                                bodyText.includes("entry confirmed") ||
+                                bodyText.includes("entry has been accepted") ||
+                                bodyText.includes("thank you for your entry");
+
                 if (isDuplicate) return "DUPLICATE";
+                // An error on the page always wins over a success phrase elsewhere on it.
+                if (isRejected) return "REJECTED";
+                if (isSuccess) return "SUBMITTED";
                 return "PENDING";
             })();
         """.trimIndent()

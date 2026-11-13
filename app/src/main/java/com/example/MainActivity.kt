@@ -311,6 +311,10 @@ fun SecondChanceApp(
                         onDeleteTicket = { ticket ->
                             viewModel.deleteTicket(ticket)
                             Toast.makeText(context, "Ticket deleted", Toast.LENGTH_SHORT).show()
+                        },
+                        onRequeueTicket = { ticket ->
+                            viewModel.markTicketStatus(ticket.id, TicketStatus.PENDING)
+                            Toast.makeText(context, "Back in the Submit queue", Toast.LENGTH_SHORT).show()
                         }
                     )
                 }
