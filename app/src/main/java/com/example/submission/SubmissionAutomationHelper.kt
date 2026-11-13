@@ -268,8 +268,14 @@ object SubmissionAutomationHelper {
                     (function submitWhenFilled() {
                         tries++;
                         if (fillCode()) {
+                            // Check once more after the page settles; if the box was rebuilt in
+                            // the meantime, go round again instead of giving up.
                             setTimeout(function() {
-                                if (fillCode()) { var b = findSubmit(); if (b) b.click(); }
+                                if (fillCode()) {
+                                    var b = findSubmit(); if (b) b.click();
+                                } else if (tries < 8) {
+                                    submitWhenFilled();
+                                }
                             }, 300);
                         } else if (tries < 8) {
                             setTimeout(submitWhenFilled, 300);
