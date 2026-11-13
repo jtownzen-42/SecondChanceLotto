@@ -24,7 +24,14 @@ data class LotteryGame(
     val topPrize: String,
     /** The open 2nd Chance promotion this game can be entered into, or null if none. */
     val promotion: SecondChancePromotion? = null,
-    val isActive: Boolean = true
+    val isActive: Boolean = true,
+    /**
+     * The letter that starts every 2nd Chance entry code on this game's tickets (e.g. "F" in
+     * F1234567890), or null when unknown. See [IllinoisLotteryGames.activeGames] for the source.
+     */
+    val entryCodeLetter: String? = null,
+    /** True when the letter was read off a real ticket; false when inferred from the pattern. */
+    val entryCodeLetterConfirmed: Boolean = false
 ) {
     val isSecondChanceEligible: Boolean get() = promotion != null
 
@@ -43,6 +50,8 @@ object IllinoisLotteryGames {
 
     const val SECOND_CHANCE_ZONE_URL = "https://illinois.secondchancebonuszone.com/2ndchance"
     const val SECOND_CHANCE_LOGIN_URL = "https://illinois.secondchancebonuszone.com/2ndchance/login"
+    /** "Enter Your Tickets" page: a "Select game" dropdown ("NAME - 7676") and an entry code box. Needs login. */
+    const val SECOND_CHANCE_ENTER_URL = "https://illinois.secondchancebonuszone.com/2ndchance/enter"
 
     /** Max eligible tickets a player can enter per day, across promotions (2nd Chance Zone FAQ). */
     const val MAX_ENTRIES_PER_DAY = 25
@@ -64,21 +73,37 @@ object IllinoisLotteryGames {
     )
 
     /**
-     * Games that can currently be entered into a 2nd Chance promotion. These are shown on the
-     * Dashboard and offered in the game pickers.
+     * Games that can currently be entered into a 2nd Chance promotion, in the same order as the
+     * "Select game" list on the 2nd Chance Zone's Enter Tickets page (checked 2026-11-13).
+     * These are shown on the Dashboard, offered in the game pickers, and auto-selected on the portal.
+     *
+     * Entry-code letters: every entry code is 1 letter + 10 digits, and each game in a promotion
+     * gets its own letter in game-number order (Crossword family A-D, holiday family E-I).
+     * "confirmed" = seen on a real ticket (Jason's photos, 2026-11-09); the rest follow the pattern
+     * and should be confirmed when a ticket of that game is scanned. Keep docs/second-chance-games.md
+     * in step with this list.
      */
     val activeGames: List<LotteryGame> = listOf(
         // 12 Weeks of Winning (2026 holiday tickets)
-        LotteryGame("7675", "Holiday Ca\$h", "\$1", "\$500", TWELVE_WEEKS_OF_WINNING),
-        LotteryGame("7676", "Reindeer Riches", "\$2", "\$50,000", TWELVE_WEEKS_OF_WINNING),
-        LotteryGame("7677", "Winter Winnings", "\$5", "\$250,000", TWELVE_WEEKS_OF_WINNING),
-        LotteryGame("7678", "Treemendous Cash", "\$10", "\$500,000", TWELVE_WEEKS_OF_WINNING),
-        LotteryGame("7679", "Snowfall Mega Multiplier", "\$20", "\$1,000,000", TWELVE_WEEKS_OF_WINNING),
+        LotteryGame("7675", "Holiday Ca\$h", "\$1", "\$500", TWELVE_WEEKS_OF_WINNING,
+            entryCodeLetter = "E"),
+        LotteryGame("7676", "Reindeer Riches", "\$2", "\$50,000", TWELVE_WEEKS_OF_WINNING,
+            entryCodeLetter = "F", entryCodeLetterConfirmed = true),
+        LotteryGame("7677", "Winter Winnings", "\$5", "\$250,000", TWELVE_WEEKS_OF_WINNING,
+            entryCodeLetter = "G"),
+        LotteryGame("7678", "Treemendous Cash", "\$10", "\$500,000", TWELVE_WEEKS_OF_WINNING,
+            entryCodeLetter = "H", entryCodeLetterConfirmed = true),
+        LotteryGame("7679", "Snowfall Mega Multiplier", "\$20", "\$1,000,000", TWELVE_WEEKS_OF_WINNING,
+            entryCodeLetter = "I"),
         // Crossword Millionaire Bonus (2026 crossword family)
-        LotteryGame("7662", "Bonus Word Crossword", "\$3", "\$50,000", CROSSWORD_MILLIONAIRE_BONUS),
-        LotteryGame("7663", "\$100,000 Crossword", "\$5", "\$100,000", CROSSWORD_MILLIONAIRE_BONUS),
-        LotteryGame("7664", "\$250,000 Crossword", "\$10", "\$250,000", CROSSWORD_MILLIONAIRE_BONUS),
-        LotteryGame("7665", "\$1,000,000 Crossword 50X", "\$25", "\$1,000,000", CROSSWORD_MILLIONAIRE_BONUS)
+        LotteryGame("7662", "Bonus Word Crossword", "\$3", "\$50,000", CROSSWORD_MILLIONAIRE_BONUS,
+            entryCodeLetter = "A"),
+        LotteryGame("7663", "\$100,000 Crossword", "\$5", "\$100,000", CROSSWORD_MILLIONAIRE_BONUS,
+            entryCodeLetter = "B", entryCodeLetterConfirmed = true),
+        LotteryGame("7664", "\$250,000 Crossword", "\$10", "\$250,000", CROSSWORD_MILLIONAIRE_BONUS,
+            entryCodeLetter = "C", entryCodeLetterConfirmed = true),
+        LotteryGame("7665", "\$1,000,000 Crossword 50X", "\$25", "\$1,000,000", CROSSWORD_MILLIONAIRE_BONUS,
+            entryCodeLetter = "D", entryCodeLetterConfirmed = true)
     )
 
     /**
@@ -138,6 +163,16 @@ object IllinoisLotteryGames {
     fun findGameByNumber(gameNumber: String): LotteryGame? {
         val clean = gameNumber.trim()
         return allGames.find { it.gameNumber == clean }
+    }
+
+    /**
+     * The open-promotion game whose entry codes start with this code's letter, or null when the
+     * code doesn't start with a letter or no single game uses it. Used when the ticket's title and
+     * game number can't be read (script titles such as Treemendous Cash defeat OCR).
+     */
+    fun findGameByEntryCode(entryCode: String): LotteryGame? {
+        val letter = entryCode.trim().firstOrNull()?.takeIf { it.isLetter() }?.uppercase() ?: return null
+        return activeGames.filter { it.entryCodeLetter == letter }.singleOrNull()
     }
 
     fun findGameByName(name: String): LotteryGame? {

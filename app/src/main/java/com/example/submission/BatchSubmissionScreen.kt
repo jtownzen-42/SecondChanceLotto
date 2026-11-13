@@ -59,6 +59,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -84,7 +85,11 @@ import com.example.data.UserPreferences
 import com.example.ui.theme.LotteryEmerald
 import com.example.ui.theme.LuckyGold
 import com.example.ui.theme.StatusSubmitted
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -163,6 +168,57 @@ fun BatchSubmissionScreen(
     }
 
     val currentTicket = pendingTickets.getOrNull(currentQueueIndex)
+
+    val scope = rememberCoroutineScope()
+    var autoFillJob by remember { mutableStateOf<Job?>(null) }
+
+    suspend fun runJs(wv: WebView, js: String): String = suspendCancellableCoroutine { cont ->
+        wv.evaluateJavascript(js) { result ->
+            if (cont.isActive) cont.resume(SubmissionAutomationHelper.unquoteJsString(result))
+        }
+    }
+
+    // Picks the ticket's game in the portal's "Select game" list, fills the entry code and submits.
+    // If the current page has no entry form, opens "Enter Your Tickets" first and waits for it.
+    fun startAutoFill(ticket: LotteryTicket) {
+        val wv = webViewInstance ?: return
+        autoFillJob?.cancel()
+        awaitingResultForTicketId = null
+        autoFillJob = scope.launch {
+            val js = SubmissionAutomationHelper.generateCodeSubmissionScript(
+                ticket.entryCode,
+                ticket.gameNumber,
+                IllinoisLotteryGames.findGameByNumber(ticket.gameNumber)?.title ?: ticket.gameName
+            )
+            var status = runJs(wv, js)
+            if (status.startsWith("NO_FORM")) {
+                if (!currentWebUrl.contains("/2ndchance/enter")) {
+                    Toast.makeText(context, "Opening Enter Your Tickets…", Toast.LENGTH_SHORT).show()
+                    wv.loadUrl(IllinoisLotteryGames.SECOND_CHANCE_ENTER_URL)
+                }
+                // Wait for the page (and any script-built form) to appear, up to ~15 s.
+                for (attempt in 1..20) {
+                    delay(750L)
+                    if (isPageLoading) continue
+                    status = runJs(wv, js)
+                    if (!status.startsWith("NO_FORM")) break
+                }
+            }
+            lastAutomationStatus = status
+            val message = when {
+                status.startsWith("SUCCESS") -> {
+                    awaitingResultForTicketId = ticket.id
+                    status.removePrefix("SUCCESS: ")
+                }
+                status.startsWith("NO_GAME") -> status.removePrefix("NO_GAME: ")
+                status.startsWith("NO_FORM") && currentWebUrl.contains("login", ignoreCase = true) ->
+                    "Log in to the 2nd Chance Zone, then tap Auto-Fill again"
+                status.startsWith("NO_FORM") -> "Couldn't find the entry form. Open Enter Your Tickets and try again."
+                else -> status.ifEmpty { "Could not locate entry field on this page" }
+            }
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        }
+    }
     val currentPromotion = remember(currentTicket?.gameNumber) {
         currentTicket?.let { IllinoisLotteryGames.findGameByNumber(it.gameNumber)?.promotion }
     }
@@ -323,27 +379,7 @@ fun BatchSubmissionScreen(
                                 ) {
                                     // Auto-Fill Code & Submit
                                     Button(
-                                        onClick = {
-                                            val js = SubmissionAutomationHelper.generateCodeSubmissionScript(
-                                                currentTicket.entryCode,
-                                                currentTicket.gameNumber
-                                            )
-                                            val ticketId = currentTicket.id
-                                            webViewInstance?.evaluateJavascript(js) { result ->
-                                                val status = SubmissionAutomationHelper.unquoteJsString(result)
-                                                lastAutomationStatus = status
-                                                if (status.startsWith("SUCCESS")) {
-                                                    awaitingResultForTicketId = ticketId
-                                                    Toast.makeText(context, "Code injected into entry form", Toast.LENGTH_SHORT).show()
-                                                } else {
-                                                    Toast.makeText(
-                                                        context,
-                                                        status.ifEmpty { "Could not locate entry field on this page" },
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
-                                                }
-                                            }
-                                        },
+                                        onClick = { startAutoFill(currentTicket) },
                                         colors = ButtonDefaults.buttonColors(containerColor = LotteryEmerald),
                                         modifier = Modifier
                                             .weight(1.3f)
