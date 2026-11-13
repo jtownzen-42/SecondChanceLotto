@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -61,10 +63,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -96,6 +101,9 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @kotlin.OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -106,6 +114,7 @@ fun CameraScannerScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val coroutineScope = rememberCoroutineScope()
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -133,33 +142,54 @@ fun CameraScannerScreen(
     var showReviewSheet by remember { mutableStateOf(false) }
     var activeTargetRegion by remember { mutableStateOf(TargetRegion.VIEWFINDER_CODE_BOX) }
 
+    val shouldAnalyzeFrames by rememberUpdatedState(!showReviewSheet && !isProcessing)
+    val currentTargetRegion by rememberUpdatedState(activeTargetRegion)
+
     // Photo picker launcher for gallery tickets
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         if (uri != null) {
+            deleteUnsavedPhotoFile(context, capturedImageUri)
+            capturedImageUri = null
             isProcessing = true
-            processImageUriWithTargetedRegion(context, uri, TargetRegion.TICKET_LOWER_SCRATCH_ZONE) { parsed, savedPath ->
-                isProcessing = false
-                parsedCandidate = parsed
-                capturedImageUri = savedPath
-                showReviewSheet = true
+            coroutineScope.launch {
+                processImageUriWithTargetedRegion(context, uri, TargetRegion.TICKET_LOWER_SCRATCH_ZONE) { parsed, savedPath ->
+                    isProcessing = false
+                    parsedCandidate = parsed
+                    capturedImageUri = savedPath
+                    showReviewSheet = true
+                }
             }
         }
     }
 
     Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
         if (hasCameraPermission) {
+            val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+            val textRecognizer = remember { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
+            var boundCameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+
+            DisposableEffect(lifecycleOwner) {
+                onDispose {
+                    try {
+                        boundCameraProvider?.unbindAll()
+                    } catch (_: Exception) {
+                    }
+                    cameraExecutor.shutdown()
+                    textRecognizer.close()
+                }
+            }
+
             // Live Camera View with ML Kit Text Recognition targeting the 2nd chance entry code zone
             AndroidView(
                 factory = { ctx ->
                     val previewView = PreviewView(ctx)
-                    val cameraExecutor = Executors.newSingleThreadExecutor()
-                    val textRecognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
                     val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
                     cameraProviderFuture.addListener({
                         val cameraProvider = cameraProviderFuture.get()
+                        boundCameraProvider = cameraProvider
                         val preview = Preview.Builder().build().also {
                             it.surfaceProvider = previewView.surfaceProvider
                         }
@@ -169,10 +199,14 @@ fun CameraScannerScreen(
                             .build()
 
                         imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                            if (!shouldAnalyzeFrames) {
+                                imageProxy.close()
+                                return@setAnalyzer
+                            }
                             processCameraFrameForEntryCode(
                                 imageProxy = imageProxy,
                                 textRecognizer = textRecognizer,
-                                targetRegion = activeTargetRegion
+                                targetRegion = currentTargetRegion
                             ) { parsed ->
                                 if (parsed.targetedRegionText.isNotBlank()) {
                                     targetedZoneSnippet = parsed.targetedRegionText
@@ -457,6 +491,8 @@ fun CameraScannerScreen(
                     // Primary Capture / Freeze Button
                     Button(
                         onClick = {
+                            deleteUnsavedPhotoFile(context, capturedImageUri)
+                            capturedImageUri = null
                             if (parsedCandidate != null) {
                                 showReviewSheet = true
                             } else {
@@ -522,9 +558,14 @@ fun CameraScannerScreen(
             TicketReviewSheet(
                 initialData = parsedCandidate!!,
                 photoUri = capturedImageUri,
-                onDismiss = { showReviewSheet = false },
+                onDismiss = {
+                    deleteUnsavedPhotoFile(context, capturedImageUri)
+                    capturedImageUri = null
+                    showReviewSheet = false
+                },
                 onSave = { ticket ->
                     showReviewSheet = false
+                    capturedImageUri = null
                     detectedLiveCode = null
                     parsedCandidate = null
                     onTicketSaved(ticket)
@@ -545,13 +586,13 @@ fun TicketReviewSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     // No made-up default: if the scan didn't recognise the game, the user must pick it.
-    var selectedGameNumber by remember { mutableStateOf(initialData.gameNumber) }
-    var selectedGameTitle by remember { mutableStateOf(initialData.gameName) }
-    var packNumber by remember { mutableStateOf(initialData.packNumber) }
-    var ticketNumber by remember { mutableStateOf(initialData.ticketNumber) }
-    var entryCode by remember { mutableStateOf(initialData.entryCode) }
-    var drawingDeadline by remember { mutableStateOf(initialData.drawingDeadline) }
-    var notes by remember { mutableStateOf("") }
+    var selectedGameNumber by remember(initialData) { mutableStateOf(initialData.gameNumber) }
+    var selectedGameTitle by remember(initialData) { mutableStateOf(initialData.gameName) }
+    var packNumber by remember(initialData) { mutableStateOf(initialData.packNumber) }
+    var ticketNumber by remember(initialData) { mutableStateOf(initialData.ticketNumber) }
+    var entryCode by remember(initialData) { mutableStateOf(initialData.entryCode) }
+    var drawingDeadline by remember(initialData) { mutableStateOf(initialData.drawingDeadline) }
+    var notes by remember(initialData) { mutableStateOf("") }
     var gameDropdownExpanded by remember { mutableStateOf(false) }
     var confirmUnusualCode by remember { mutableStateOf(false) }
 
@@ -798,29 +839,84 @@ private fun processCameraFrameForEntryCode(
     }
 }
 
+private fun deleteUnsavedPhotoFile(context: Context, path: String?) {
+    if (path.isNullOrBlank()) return
+    try {
+        val file = File(path)
+        if (file.exists() && file.parentFile?.canonicalPath == context.filesDir.canonicalPath) {
+            file.delete()
+        }
+    } catch (_: Exception) {
+    }
+}
+
+private fun decodeUprightBitmap(context: Context, uri: Uri): Bitmap? {
+    val rawBitmap = context.contentResolver.openInputStream(uri)?.use { stream ->
+        BitmapFactory.decodeStream(stream)
+    } ?: return null
+
+    val orientation = try {
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+            ExifInterface(stream).getAttributeInt(
+                ExifInterface.TAG_ORIENTATION,
+                ExifInterface.ORIENTATION_NORMAL
+            )
+        } ?: ExifInterface.ORIENTATION_NORMAL
+    } catch (_: Exception) {
+        ExifInterface.ORIENTATION_NORMAL
+    }
+
+    val matrix = Matrix()
+    when (orientation) {
+        ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+        ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+        ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.preScale(-1f, 1f)
+        ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
+        ExifInterface.ORIENTATION_TRANSPOSE -> {
+            matrix.postRotate(90f)
+            matrix.preScale(-1f, 1f)
+        }
+        ExifInterface.ORIENTATION_TRANSVERSE -> {
+            matrix.postRotate(270f)
+            matrix.preScale(-1f, 1f)
+        }
+        else -> return rawBitmap
+    }
+
+    return try {
+        val rotated = Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
+        if (rotated !== rawBitmap) rawBitmap.recycle()
+        rotated
+    } catch (_: Exception) {
+        rawBitmap
+    }
+}
+
 /**
  * Runs ML Kit Text Recognition on both the cropped [TargetRegion] (where second-chance
  * lottery entry codes are located) and the full ticket image.
  */
-private fun processImageUriWithTargetedRegion(
+private suspend fun processImageUriWithTargetedRegion(
     context: Context,
     uri: Uri,
     targetRegion: TargetRegion,
     onComplete: (ParsedLotteryData, String?) -> Unit
 ) {
     try {
-        val inputStream = context.contentResolver.openInputStream(uri)
-        val bitmap = BitmapFactory.decodeStream(inputStream)
-        inputStream?.close()
-
-        if (bitmap != null) {
+        val prepared = withContext(Dispatchers.IO) {
+            val bitmap = decodeUprightBitmap(context, uri) ?: return@withContext null
             val localFile = File(context.filesDir, "ticket_${System.currentTimeMillis()}.jpg")
-            val outputStream = FileOutputStream(localFile)
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
-            outputStream.flush()
-            outputStream.close()
-
+            FileOutputStream(localFile).use { outputStream ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
+                outputStream.flush()
+            }
             val croppedRegionBitmap = LotteryCodeParser.cropBitmapToRegion(bitmap, targetRegion)
+            Triple(bitmap, croppedRegionBitmap, localFile.absolutePath)
+        }
+
+        if (prepared != null) {
+            val (bitmap, croppedRegionBitmap, savedPath) = prepared
             val regionInputImage = InputImage.fromBitmap(croppedRegionBitmap, 0)
             val fullInputImage = InputImage.fromBitmap(bitmap, 0)
             val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
@@ -834,15 +930,18 @@ private fun processImageUriWithTargetedRegion(
                                 fullFrameText = fullVisionText.text,
                                 symbolLines = LotteryCodeParser.symbolLinesOf(regionVisionText, fullVisionText)
                             )
-                            onComplete(parsed, localFile.absolutePath)
+                            recognizer.close()
+                            onComplete(parsed, savedPath)
                         }
                         .addOnFailureListener {
                             val parsed = LotteryCodeParser.parse(regionVisionText.text)
-                            onComplete(parsed, localFile.absolutePath)
+                            recognizer.close()
+                            onComplete(parsed, savedPath)
                         }
                 }
                 .addOnFailureListener {
-                    onComplete(ParsedLotteryData(rawText = "Failed to parse OCR"), localFile.absolutePath)
+                    recognizer.close()
+                    onComplete(ParsedLotteryData(rawText = "Failed to parse OCR"), savedPath)
                 }
         } else {
             onComplete(ParsedLotteryData(), null)

@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -64,6 +66,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.example.data.IllinoisLotteryGames
 import com.example.data.LotteryTicket
 import com.example.data.TicketStatus
 import com.example.ui.theme.LotteryEmerald
@@ -80,14 +83,23 @@ import java.util.Locale
 fun TicketVaultScreen(
     tickets: List<LotteryTicket>,
     onDeleteTicket: (LotteryTicket) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    filterGameNumber: String? = null,
+    onClearGameFilter: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf<TicketStatus?>(null) }
     var ticketToDelete by remember { mutableStateOf<LotteryTicket?>(null) }
+    var ticketPhotoToView by remember { mutableStateOf<LotteryTicket?>(null) }
 
-    val filteredTickets = tickets.filter { ticket ->
+    val gameFilteredTickets = if (filterGameNumber.isNullOrBlank()) {
+        tickets
+    } else {
+        tickets.filter { it.gameNumber == filterGameNumber }
+    }
+
+    val filteredTickets = gameFilteredTickets.filter { ticket ->
         val matchesFilter = selectedFilter == null || ticket.status == selectedFilter
         val matchesSearch = searchQuery.isBlank() ||
             ticket.entryCode.contains(searchQuery, ignoreCase = true) ||
@@ -164,13 +176,36 @@ fun TicketVaultScreen(
 
         // Filter Chips Row
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            if (!filterGameNumber.isNullOrBlank()) {
+                val gameTitle = IllinoisLotteryGames.findGameByNumber(filterGameNumber)?.title ?: "Game #$filterGameNumber"
+                FilterChip(
+                    selected = true,
+                    onClick = onClearGameFilter,
+                    label = { Text("$gameTitle (#$filterGameNumber)") },
+                    trailingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Clear,
+                            contentDescription = "Clear game filter",
+                            modifier = Modifier.size(16.dp)
+                        )
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = LotteryEmerald,
+                        selectedLabelColor = Color.Black,
+                        selectedTrailingIconColor = Color.Black
+                    ),
+                    modifier = Modifier.testTag("vault_game_filter_chip")
+                )
+            }
             FilterChip(
                 selected = selectedFilter == null,
                 onClick = { selectedFilter = null },
-                label = { Text("All (${tickets.size})") },
+                label = { Text("All (${gameFilteredTickets.size})") },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = LotteryEmerald,
                     selectedLabelColor = Color.Black
@@ -179,7 +214,7 @@ fun TicketVaultScreen(
             FilterChip(
                 selected = selectedFilter == TicketStatus.PENDING,
                 onClick = { selectedFilter = if (selectedFilter == TicketStatus.PENDING) null else TicketStatus.PENDING },
-                label = { Text("Pending (${tickets.count { it.status == TicketStatus.PENDING }})") },
+                label = { Text("Pending (${gameFilteredTickets.count { it.status == TicketStatus.PENDING }})") },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = LuckyGold,
                     selectedLabelColor = Color.Black
@@ -188,12 +223,24 @@ fun TicketVaultScreen(
             FilterChip(
                 selected = selectedFilter == TicketStatus.SUBMITTED,
                 onClick = { selectedFilter = if (selectedFilter == TicketStatus.SUBMITTED) null else TicketStatus.SUBMITTED },
-                label = { Text("Submitted (${tickets.count { it.status == TicketStatus.SUBMITTED }})") },
+                label = { Text("Submitted (${gameFilteredTickets.count { it.status == TicketStatus.SUBMITTED }})") },
                 colors = FilterChipDefaults.filterChipColors(
                     selectedContainerColor = LotteryEmerald,
                     selectedLabelColor = Color.Black
                 )
             )
+            val duplicateCount = gameFilteredTickets.count { it.status == TicketStatus.DUPLICATE }
+            if (duplicateCount > 0 || selectedFilter == TicketStatus.DUPLICATE) {
+                FilterChip(
+                    selected = selectedFilter == TicketStatus.DUPLICATE,
+                    onClick = { selectedFilter = if (selectedFilter == TicketStatus.DUPLICATE) null else TicketStatus.DUPLICATE },
+                    label = { Text("Duplicate ($duplicateCount)") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = StatusError,
+                        selectedLabelColor = Color.White
+                    )
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -238,11 +285,50 @@ fun TicketVaultScreen(
                             clipboard.setPrimaryClip(ClipData.newPlainText("Lottery Code", ticket.entryCode))
                             Toast.makeText(context, "Copied ${ticket.entryCode}", Toast.LENGTH_SHORT).show()
                         },
+                        onViewPhoto = { ticketPhotoToView = ticket },
                         onDelete = { ticketToDelete = ticket }
                     )
                 }
             }
         }
+    }
+
+    // Ticket Photo Preview Dialog
+    if (ticketPhotoToView != null) {
+        val viewedTicket = ticketPhotoToView!!
+        AlertDialog(
+            onDismissRequest = { ticketPhotoToView = null },
+            title = { Text("${viewedTicket.gameName} (#${viewedTicket.gameNumber})") },
+            text = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(260.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color.DarkGray)
+                    ) {
+                        AsyncImage(
+                            model = viewedTicket.imageUri,
+                            contentDescription = "Ticket claim proof photo",
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Code: ${viewedTicket.formattedCode}",
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold,
+                        color = LotteryEmerald
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { ticketPhotoToView = null }) {
+                    Text("Close")
+                }
+            }
+        )
     }
 
     // Delete Confirmation Dialog
@@ -276,7 +362,8 @@ fun TicketVaultScreen(
 fun TicketVaultCard(
     ticket: LotteryTicket,
     onCopyCode: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onViewPhoto: () -> Unit = {}
 ) {
     val dateFormat = remember { SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()) }
 
@@ -433,7 +520,22 @@ fun TicketVaultCard(
             // Photo preview if available
             if (ticket.imageUri != null) {
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onViewPhoto)
+                        .padding(vertical = 4.dp, horizontal = 4.dp)
+                ) {
+                    AsyncImage(
+                        model = ticket.imageUri,
+                        contentDescription = "Ticket thumbnail",
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(Color.DarkGray)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
                     Icon(
                         Icons.Default.Image,
                         contentDescription = null,
@@ -442,7 +544,7 @@ fun TicketVaultCard(
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "Ticket photo attached for claim proof",
+                        text = "Ticket photo attached for claim proof (Tap to view)",
                         style = MaterialTheme.typography.labelSmall,
                         color = LotteryEmerald
                     )

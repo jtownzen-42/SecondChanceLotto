@@ -6,11 +6,23 @@ enum class PortalResult { SUBMITTED, DUPLICATE, UNKNOWN }
 object SubmissionAutomationHelper {
 
     /**
+     * Safely unwraps a JSON string literal returned by `WebView.evaluateJavascript`,
+     * returning `""` when the result is `null` or `"null"`.
+     */
+    fun unquoteJsString(rawJsResult: String?): String {
+        val trimmed = rawJsResult?.trim() ?: return ""
+        if (trimmed.isEmpty() || trimmed == "null") return ""
+        return trimmed.removeSurrounding("\"")
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+    }
+
+    /**
      * Maps the raw value returned by `evaluateJavascript` for [generateCheckSuccessScript]
      * (a JSON string such as `"SUBMITTED"`, or `null`) to a [PortalResult].
      */
     fun parsePortalResult(rawJsResult: String?): PortalResult =
-        when (rawJsResult?.trim()?.removeSurrounding("\"")) {
+        when (unquoteJsString(rawJsResult)) {
             "SUBMITTED" -> PortalResult.SUBMITTED
             "DUPLICATE" -> PortalResult.DUPLICATE
             else -> PortalResult.UNKNOWN

@@ -142,8 +142,8 @@ object LotteryCodeParser {
                 i++
             }
             if (digits.length < 10 || realDigits < 7) continue
-            // Must not run on into more digits (that would be a longer number, not a code).
-            if (i < s.length && s[i].isDigit()) continue
+            // Must not run on into more letters or digits (that would be a longer token or shifted match).
+            if (i < s.length && (s[i].isLetterOrDigit() || (s[i] == '-' && i + 1 < s.length && s[i + 1].isLetterOrDigit()))) continue
             return EntryCodeMatch("$letter$digits", indices, substituted)
         }
         return null
@@ -174,11 +174,18 @@ object LotteryCodeParser {
         return code to ""
     }
 
-    /** Collects per-line character confidences from ML Kit results for [refineWithSymbols]. */
+    /** Collects per-line character confidences from ML Kit results for [refineWithSymbols], preserving spaces between words. */
     fun symbolLinesOf(vararg texts: Text): List<List<OcrSymbol>> =
         texts.flatMap { t ->
             t.textBlocks.flatMap { b -> b.lines }.map { line ->
-                line.elements.flatMap { e -> e.symbols }.map { OcrSymbol(it.text, it.confidence) }
+                buildList {
+                    line.elements.forEachIndexed { index, element ->
+                        if (index > 0) add(OcrSymbol(" ", 1.0f))
+                        element.symbols.forEach { sym ->
+                            add(OcrSymbol(sym.text, sym.confidence))
+                        }
+                    }
+                }
             }
         }
 
@@ -197,6 +204,7 @@ object LotteryCodeParser {
     // Regex patterns for Illinois instant scratch tickets
     private val ENTRY_CODE_REGEX = Regex("""(?i)\b([0-9A-Z]{10,14})\b""")
     private val HYPHENATED_CODE_REGEX = Regex("""(?i)\b([0-9A-Z]{3,5})[- ]([0-9A-Z]{4,6})[- ]([0-9A-Z]{3,5})\b""")
+    private val EXPLICIT_TICKET_REGEX = Regex("""(?i)\bticket\s*[:#]?\s*\d{2,3}\b|\b\d{3,4}[\s\-]+\d{5}[\s\-]+\d{3}\b""")
 
     /**
      * Crops a bitmap to the specified [TargetRegion] so ML Kit Text Recognition
@@ -296,7 +304,15 @@ object LotteryCodeParser {
         val chosenGameNumber = fullParsed.gameNumber.ifEmpty { roiParsed.gameNumber }
         val chosenGameName = if (fullParsed.gameNumber.isNotEmpty()) fullParsed.gameName else roiParsed.gameName
         val chosenPack = roiParsed.packNumber.ifEmpty { fullParsed.packNumber }
-        val chosenTicket = roiParsed.ticketNumber.ifEmpty { fullParsed.ticketNumber }
+        val chosenTicket = if (
+            fullParsed.ticketNumber.isNotEmpty() &&
+            EXPLICIT_TICKET_REGEX.containsMatchIn(fullFrameText) &&
+            !EXPLICIT_TICKET_REGEX.containsMatchIn(targetedRegionText)
+        ) {
+            fullParsed.ticketNumber
+        } else {
+            roiParsed.ticketNumber.ifEmpty { fullParsed.ticketNumber }
+        }
         val chosenDeadline = if (fullParsed.gameNumber.isNotEmpty()) fullParsed.drawingDeadline else roiParsed.drawingDeadline
 
         return ParsedLotteryData(

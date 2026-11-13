@@ -192,6 +192,39 @@ class ScannerAccuracyTest {
         assertEquals("W9182736450", parsed.entryCode)
     }
 
+    @Test
+    fun explicitTicketLabelInFullFrame_beatsStandaloneNumberInRoi() {
+        val parsed = LotteryCodeParser.parseWithTargetedRegion(
+            targetedRegionText = "115\nW9182736450",
+            fullFrameText = "GAME 7676 - PACK 04821 - TICKET 014\n115\nW9182736450"
+        )
+        assertEquals("014", parsed.ticketNumber)
+        assertEquals("04821", parsed.packNumber)
+        assertEquals("W9182736450", parsed.entryCode)
+    }
+
+    @Test
+    fun strayPrefix_withConfusedLastDigit_doesNotShiftCode() {
+        val parsed = LotteryCodeParser.parse("IB492015829O")
+        assertEquals("B4920158290", parsed.entryCode)
+        assertTrue(parsed.codeNeedsReview)
+    }
+
+    @Test
+    fun strictCode_isNotTakenWhenFollowedByLetter() {
+        assertNull(LotteryCodeParser.parse("SERIAL A1234567890B").entryCode.takeIf { LotteryCodeParser.isValidEntryCode(it) })
+    }
+
+    @Test
+    fun symbolRefinement_worksOnMultiWordLine() {
+        val lineText = "ENTRY CODE P7738219406"
+        val syms = listOf(symbols(lineText, low = mapOf(15 to 0.22f)))
+        val parsed = LotteryCodeParser.parseWithTargetedRegion(lineText, lineText, syms)
+        assertEquals("P7730219406", parsed.entryCode)
+        assertTrue(parsed.codeNeedsReview)
+        assertTrue(parsed.codeReviewReason.contains("slashed 0"))
+    }
+
     // --- input helpers ---------------------------------------------------------------------
 
     @Test
