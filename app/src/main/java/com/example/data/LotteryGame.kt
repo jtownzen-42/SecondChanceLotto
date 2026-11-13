@@ -79,7 +79,7 @@ object IllinoisLotteryGames {
      *
      * Entry-code letters: every entry code is 1 letter + 10 digits, and each game in a promotion
      * gets its own letter in game-number order (Crossword family A-D, holiday family E-I).
-     * "confirmed" = seen on a real ticket (Jason's photos, 2026-11-09); the rest follow the pattern
+     * "confirmed" = seen on a real ticket (Jason's tickets, 2026-11-09 and 11-13); the rest follow the pattern
      * and should be confirmed when a ticket of that game is scanned. Keep docs/second-chance-games.md
      * in step with this list.
      */
@@ -97,7 +97,7 @@ object IllinoisLotteryGames {
             entryCodeLetter = "I"),
         // Crossword Millionaire Bonus (2026 crossword family)
         LotteryGame("7662", "Bonus Word Crossword", "\$3", "\$50,000", CROSSWORD_MILLIONAIRE_BONUS,
-            entryCodeLetter = "A"),
+            entryCodeLetter = "A", entryCodeLetterConfirmed = true),
         LotteryGame("7663", "\$100,000 Crossword", "\$5", "\$100,000", CROSSWORD_MILLIONAIRE_BONUS,
             entryCodeLetter = "B", entryCodeLetterConfirmed = true),
         LotteryGame("7664", "\$250,000 Crossword", "\$10", "\$250,000", CROSSWORD_MILLIONAIRE_BONUS,
@@ -170,6 +170,19 @@ object IllinoisLotteryGames {
      * code doesn't start with a letter or no single game uses it. Used when the ticket's title and
      * game number can't be read (script titles such as Treemendous Cash defeat OCR).
      */
+    private const val PORTAL_HOST = "illinois.secondchancebonuszone.com"
+
+    /**
+     * The https:// form of a plain http:// 2nd Chance Zone address, or null when [url] isn't one.
+     * The portal sometimes redirects to http://, which Android's WebView refuses to load.
+     */
+    fun upgradeToHttps(url: String?): String? {
+        if (url == null || !url.startsWith("http://", ignoreCase = true)) return null
+        val rest = url.substring("http://".length)
+        val host = rest.substringBefore('/').substringBefore('?').substringBefore(':')
+        return if (host.equals(PORTAL_HOST, ignoreCase = true)) "https://$rest" else null
+    }
+
     fun findGameByEntryCode(entryCode: String): LotteryGame? {
         val letter = entryCode.trim().firstOrNull()?.takeIf { it.isLetter() }?.uppercase() ?: return null
         return activeGames.filter { it.entryCodeLetter == letter }.singleOrNull()

@@ -13,7 +13,7 @@ Last checked against the live "Select game" list: **2026-11-13**.
 | Winter Winnings | 7677 | G | inferred | 12 Weeks of Winning | Jan 10, 2027 |
 | Treemendous Cash | 7678 | H | confirmed | 12 Weeks of Winning | Jan 10, 2027 |
 | Snowfall Mega Multiplier | 7679 | I | inferred | 12 Weeks of Winning | Jan 10, 2027 |
-| Bonus Word Crossword | 7662 | A | inferred | Crossword Millionaire Bonus | Jun 20, 2027 |
+| Bonus Word Crossword | 7662 | A | confirmed | Crossword Millionaire Bonus | Jun 20, 2027 |
 | $100,000 Crossword | 7663 | B | confirmed | Crossword Millionaire Bonus | Jun 20, 2027 |
 | $250,000 Crossword | 7664 | C | confirmed | Crossword Millionaire Bonus | Jun 20, 2027 |
 | $1,000,000 Crossword 50X | 7665 | D | confirmed | Crossword Millionaire Bonus | Jun 20, 2027 |
