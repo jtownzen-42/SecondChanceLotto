@@ -170,6 +170,11 @@ object IllinoisLotteryGames {
      * code doesn't start with a letter or no single game uses it. Used when the ticket's title and
      * game number can't be read (script titles such as Treemendous Cash defeat OCR).
      */
+    /** Enter Your Tickets with the game preselected (the site reads ?game_id=). */
+    fun enterUrlFor(gameNumber: String): String =
+        if (gameNumber.length == 4 && gameNumber.all(Char::isDigit)) "$SECOND_CHANCE_ENTER_URL?game_id=$gameNumber"
+        else SECOND_CHANCE_ENTER_URL
+
     private const val PORTAL_HOST = "illinois.secondchancebonuszone.com"
 
     /**

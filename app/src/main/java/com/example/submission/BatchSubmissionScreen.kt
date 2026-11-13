@@ -300,7 +300,8 @@ fun BatchSubmissionScreen(
             if (status.startsWith("NO_FORM")) {
                 if (!currentWebUrl.contains("/2ndchance/enter")) {
                     Toast.makeText(context, "Opening Enter Your Tickets…", Toast.LENGTH_SHORT).show()
-                    wv.loadUrl(IllinoisLotteryGames.SECOND_CHANCE_ENTER_URL)
+                    // The site preselects the game from ?game_id=.
+                    wv.loadUrl(IllinoisLotteryGames.enterUrlFor(ticket.gameNumber))
                 }
                 // Wait for the page (and any script-built form) to appear, up to ~15 s.
                 for (attempt in 1..20) {

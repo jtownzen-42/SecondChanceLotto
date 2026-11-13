@@ -35,3 +35,12 @@ the status to confirmed, or fix the letter, the first time a ticket of that game
 
 When a promotion ends or a new one starts, compare the portal's Select game list with this table,
 then update `activeGames` (and the promotion dates) and this file.
+
+## The live entry form (read from the phone, 2026-11-13)
+
+- Page: `/2ndchance/enter` (a React app; `?game_id=7664` preselects a game).
+- Game list: `select#promotion_game_id`, option values are the game numbers.
+- Entry code: `input#ticket1_1_1` (11 characters; the site uppercases it and strips spaces).
+- Submit: `input#entry-submit` ("SUBMIT ENTRY"). It posts by XHR to `/api/2ndchance/ValidateTicket`; the page does not reload.
+- Answer: shown in `#entry-alert`. Success: "Your entry has been accepted and added to your 'My Entries' page." Failure: a red `alert-danger` box, e.g. "Ticket not entered, please try again."
+- Lockout: after 5 failed tries, "You have exceeded the maximum number of unsuccessful entry attempts, 5. You may try again in 8 hours."

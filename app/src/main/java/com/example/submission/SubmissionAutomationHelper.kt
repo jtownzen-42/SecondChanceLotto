@@ -156,6 +156,9 @@ object SubmissionAutomationHelper {
 
                     // 1. The game dropdown: a <select> with an option carrying the game number.
                     var selects = Array.prototype.slice.call(document.querySelectorAll('select'));
+                    // The live form's game list is select#promotion_game_id with game numbers as values.
+                    var exactSelect = document.getElementById('promotion_game_id');
+                    if (exactSelect) selects = [exactSelect].concat(selects.filter(function(x) { return x !== exactSelect; }));
                     var gameSelect = null, gameOption = null;
                     for (var i = 0; i < selects.length && !gameOption; i++) {
                         var opts = selects[i].options;
@@ -197,6 +200,9 @@ object SubmissionAutomationHelper {
                         })[0] || null;
                     }
                     function findCodeBox() {
+                        // The live 2nd Chance Zone form (checked 2026-11-13) names the box ticket1_1_1.
+                        var exact = document.getElementById('ticket1_1_1');
+                        if (exact && textLike(exact)) return exact;
                         var inputs = Array.prototype.slice.call(document.querySelectorAll('input')).filter(textLike);
                         // a) The box labelled "Entry Code".
                         var labels = Array.prototype.slice.call(document.querySelectorAll('label'));
@@ -352,6 +358,7 @@ object SubmissionAutomationHelper {
                                   bodyText.includes("already been submitted") ||
                                   bodyText.includes("duplicate entry");
                 var isRejected = bodyText.includes("please completely fill out") ||
+                                 bodyText.includes("ticket not entered") ||
                                  bodyText.includes("invalid entry code") ||
                                  bodyText.includes("entry code is invalid") ||
                                  bodyText.includes("not a valid") ||
@@ -365,6 +372,16 @@ object SubmissionAutomationHelper {
                                 bodyText.includes("entry has been accepted") ||
                                 bodyText.includes("thank you for your entry");
 
+                // The live site shows every answer in #entry-alert: green "has been accepted" on
+                // success, a red alert-danger box with the reason otherwise.
+                var alertBox = document.getElementById('entry-alert');
+                var alertText = alertBox && alertBox.offsetWidth ? (alertBox.innerText || '').toLowerCase() : '';
+                var alertIsError = !!alertBox && /alert-danger|alert-warning/.test(alertBox.className || '');
+                if (alertText) {
+                    if (alertText.indexOf('has been accepted') >= 0) isSuccess = true;
+                    else if (alertText.indexOf('already') >= 0) isDuplicate = true;
+                    else if (alertIsError) isRejected = true;
+                }
                 // "|S": Submit was pressed since the last Auto-Fill (and the page had a moment to answer).
                 var seen = (window.__scSubmittedAt && Date.now() - window.__scSubmittedAt > 1500) ? "|S" : "";
                 if (bodyText.includes("$LOCKOUT_PHRASE")) return "LOCKED" + seen;

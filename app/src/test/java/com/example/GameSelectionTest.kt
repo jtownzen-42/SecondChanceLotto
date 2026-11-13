@@ -139,4 +139,17 @@ class GameSelectionTest {
         assertTrue(!SubmissionAutomationHelper.submitSeen("\"REJECTED\""))
         assertTrue(!SubmissionAutomationHelper.submitSeen(null))
     }
+
+    @Test
+    fun enterUrl_preselectsTheGame() {
+        assertEquals(
+            "https://illinois.secondchancebonuszone.com/2ndchance/enter?game_id=7664",
+            IllinoisLotteryGames.enterUrlFor("7664")
+        )
+        assertEquals(IllinoisLotteryGames.SECOND_CHANCE_ENTER_URL, IllinoisLotteryGames.enterUrlFor(""))
+        val check = SubmissionAutomationHelper.generateCheckSuccessScript()
+        assertTrue(check.contains("entry-alert"))
+        assertTrue(check.contains("ticket not entered"))
+        assertTrue(SubmissionAutomationHelper.generateCodeSubmissionScript("C1234567890", "7664").contains("ticket1_1_1"))
+    }
 }
