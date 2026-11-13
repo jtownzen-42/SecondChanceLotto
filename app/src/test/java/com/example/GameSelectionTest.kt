@@ -128,4 +128,15 @@ class GameSelectionTest {
                 .contains("AUTO_SUBMIT = true")
         )
     }
+
+    @Test
+    fun resultCheck_reportsWhetherSubmitWasPressed() {
+        assertEquals(
+            com.example.submission.PortalResult.REJECTED,
+            SubmissionAutomationHelper.parsePortalResult("\"REJECTED|S\"")
+        )
+        assertTrue(SubmissionAutomationHelper.submitSeen("\"REJECTED|S\""))
+        assertTrue(!SubmissionAutomationHelper.submitSeen("\"REJECTED\""))
+        assertTrue(!SubmissionAutomationHelper.submitSeen(null))
+    }
 }

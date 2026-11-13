@@ -33,13 +33,19 @@ object SubmissionAutomationHelper {
      * (a JSON string such as `"SUBMITTED"`, or `null`) to a [PortalResult].
      */
     fun parsePortalResult(rawJsResult: String?): PortalResult =
-        when (unquoteJsString(rawJsResult)) {
+        when (unquoteJsString(rawJsResult).substringBefore('|')) {
             "SUBMITTED" -> PortalResult.SUBMITTED
             "DUPLICATE" -> PortalResult.DUPLICATE
             "REJECTED" -> PortalResult.REJECTED
             "LOCKED" -> PortalResult.LOCKED
             else -> PortalResult.UNKNOWN
         }
+
+    /**
+     * True when the result check saw the user (or the app) press Submit on the page since the
+     * last Auto-Fill, so a message on the page can be trusted as the answer to that attempt.
+     */
+    fun submitSeen(rawJsResult: String?): Boolean = unquoteJsString(rawJsResult).endsWith("|S")
 
     fun generateLoginScript(email: String, pass: String): String {
         val safeEmail = escapeJsString(email)
@@ -277,13 +283,35 @@ object SubmissionAutomationHelper {
                             .filter(function(el) { return /submit\s*entry|^\s*submit\s*${'$'}/i.test(el.innerText || el.value || ''); })[0] || null;
                     }
 
+                    // Note when Submit is pressed after this fill, so the result check can tell a
+                    // fresh answer from a message that was already on the page.
+                    window.__scSubmittedAt = 0;
+                    if (!window.__scHooked) {
+                        window.__scHooked = true;
+                        var markSubmit = function() { window.__scSubmittedAt = Date.now(); };
+                        document.addEventListener('submit', markSubmit, true);
+                        document.addEventListener('click', function(e) {
+                            var el = e.target && e.target.closest ? e.target.closest('button, input[type="submit"], input[type="button"], a') : null;
+                            if (el && /submit/i.test(el.innerText || el.value || '')) markSubmit();
+                        }, true);
+                    }
                     var codeFilled = fillCode();
                     var picked = gameOption ? ('Selected ' + gameOption.text.trim() + '. ') : '';
                     if (!AUTO_SUBMIT || !findSubmit()) {
-                        setTimeout(fillCode, 400);
-                        return codeFilled || findCodeBox()
-                            ? ("FILLED: " + picked + "Code filled. Check it, then press Submit Entry.")
-                            : ("NO_FORM: " + picked + "Entry code box not found");
+                        // Keep the code in the box for ~3 s while the form settles after the game
+                        // change (it may be rebuilt), without ever pressing Submit.
+                        var refills = 0;
+                        (function keepFilled() {
+                            refills++;
+                            fillCode();
+                            if (refills < 10) setTimeout(keepFilled, 300);
+                        })();
+                        if (codeFilled) {
+                            return "FILLED: " + picked + "Code filled. Check it, then press Submit Entry.";
+                        }
+                        return findCodeBox()
+                            ? ("NOT_FILLED: " + picked + "The code didn't stay in the box. Paste it (it's copied) and check it before Submit Entry.")
+                            : ("NO_CODE_BOX: " + picked + "Couldn't find the Entry Code box. Paste the code and press Submit Entry.");
                     }
                     if (!findCodeBox()) {
                         return "NO_CODE_BOX: " + picked + "Couldn't find the Entry Code box. Paste the code and press Submit Entry.";
@@ -337,11 +365,13 @@ object SubmissionAutomationHelper {
                                 bodyText.includes("entry has been accepted") ||
                                 bodyText.includes("thank you for your entry");
 
-                if (bodyText.includes("$LOCKOUT_PHRASE")) return "LOCKED";
-                if (isDuplicate) return "DUPLICATE";
+                // "|S": Submit was pressed since the last Auto-Fill (and the page had a moment to answer).
+                var seen = (window.__scSubmittedAt && Date.now() - window.__scSubmittedAt > 1500) ? "|S" : "";
+                if (bodyText.includes("$LOCKOUT_PHRASE")) return "LOCKED" + seen;
+                if (isDuplicate) return "DUPLICATE" + seen;
                 // An error on the page always wins over a success phrase elsewhere on it.
-                if (isRejected) return "REJECTED";
-                if (isSuccess) return "SUBMITTED";
+                if (isRejected) return "REJECTED" + seen;
+                if (isSuccess) return "SUBMITTED" + seen;
                 return "PENDING";
             })();
         """.trimIndent()

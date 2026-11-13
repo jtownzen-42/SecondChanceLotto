@@ -173,11 +173,11 @@ fun BatchSubmissionScreen(
 
     // A ticket is only marked entered when the site itself says the entry went in.
     // Returns true when the result was conclusive (the ticket is no longer being watched).
-    fun handlePortalResult(ticketId: Long, result: PortalResult): Boolean {
+    fun handlePortalResult(ticketId: Long, result: PortalResult, submitSeen: Boolean = false): Boolean {
         if (awaitingResultForTicketId != ticketId) return true
         // A message that was already on the page before this attempt (e.g. an old error banner)
-        // says nothing about this attempt; wait for the page to change.
-        if (result == staleResultOnPage) return false
+        // says nothing about it, unless Submit has been pressed since (then it's the answer).
+        if (result == staleResultOnPage && !submitSeen) return false
         return when (result) {
             PortalResult.SUBMITTED -> {
                 awaitingResultForTicketId = null
@@ -232,7 +232,11 @@ fun BatchSubmissionScreen(
             val wv = webViewInstance ?: break
             val isLastAttempt = attempt == maxAttempts
             wv.evaluateJavascript(SubmissionAutomationHelper.generateCheckSuccessScript()) { result ->
-                val conclusive = handlePortalResult(targetId, SubmissionAutomationHelper.parsePortalResult(result))
+                val conclusive = handlePortalResult(
+                    targetId,
+                    SubmissionAutomationHelper.parsePortalResult(result),
+                    SubmissionAutomationHelper.submitSeen(result)
+                )
                 if (!conclusive && isLastAttempt && awaitingResultForTicketId == targetId) {
                     awaitingResultForTicketId = null
                     lastAutomationStatus = "UNCONFIRMED: no confirmation from the site. Ticket stays in the queue."
@@ -327,6 +331,7 @@ fun BatchSubmissionScreen(
                 }
                 status.startsWith("NO_GAME") -> status.removePrefix("NO_GAME: ")
                 status.startsWith("NO_CODE_BOX") -> status.removePrefix("NO_CODE_BOX: ") + " (code copied)"
+                status.startsWith("NOT_FILLED") -> status.removePrefix("NOT_FILLED: ")
                 status.startsWith("NO_FORM") && currentWebUrl.contains("login", ignoreCase = true) ->
                     "Log in to the 2nd Chance Zone, then tap Auto-Fill again"
                 status.startsWith("NO_FORM") -> "Couldn't find the entry form. Open Enter Your Tickets and try again."
@@ -845,7 +850,11 @@ fun BatchSubmissionScreen(
                                 val ticketId = awaitingResultForTicketId ?: return
                                 // Inconclusive results keep watching; the poll above gives up after ~30 s.
                                 evaluateJavascript(SubmissionAutomationHelper.generateCheckSuccessScript()) { result ->
-                                    latestHandlePortalResult(ticketId, SubmissionAutomationHelper.parsePortalResult(result))
+                                    latestHandlePortalResult(
+                                        ticketId,
+                                        SubmissionAutomationHelper.parsePortalResult(result),
+                                        SubmissionAutomationHelper.submitSeen(result)
+                                    )
                                 }
                             }
                         }
