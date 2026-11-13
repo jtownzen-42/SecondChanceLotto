@@ -127,10 +127,12 @@ fun BatchSubmissionScreen(
     // Poll DOM for SPA / XHR submission results that don't trigger a full page reload
     LaunchedEffect(awaitingResultForTicketId) {
         val targetId = awaitingResultForTicketId ?: return@LaunchedEffect
-        for (waitMs in listOf(900L, 900L, 1200L)) {
-            delay(waitMs)
+        val maxAttempts = 30
+        for (attempt in 1..maxAttempts) {
+            delay(1000L)
             if (awaitingResultForTicketId != targetId) return@LaunchedEffect
             val wv = webViewInstance ?: break
+            val isLastAttempt = attempt == maxAttempts
             wv.evaluateJavascript(SubmissionAutomationHelper.generateCheckSuccessScript()) { result ->
                 if (awaitingResultForTicketId != targetId) return@evaluateJavascript
                 when (SubmissionAutomationHelper.parsePortalResult(result)) {
@@ -144,12 +146,13 @@ fun BatchSubmissionScreen(
                         completedInSessionCount++
                         latestOnTicketDuplicate(targetId)
                     }
-                    PortalResult.UNKNOWN -> Unit
+                    PortalResult.UNKNOWN -> {
+                        if (isLastAttempt) {
+                            awaitingResultForTicketId = null
+                        }
+                    }
                 }
             }
-        }
-        if (awaitingResultForTicketId == targetId) {
-            awaitingResultForTicketId = null
         }
     }
 
@@ -452,21 +455,30 @@ fun BatchSubmissionScreen(
                     ) {
                         Row {
                             IconButton(
-                                onClick = { webViewInstance?.goBack() },
+                                onClick = {
+                                    awaitingResultForTicketId = null
+                                    webViewInstance?.goBack()
+                                },
                                 enabled = webViewInstance?.canGoBack() == true,
                                 modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(18.dp))
                             }
                             IconButton(
-                                onClick = { webViewInstance?.goForward() },
+                                onClick = {
+                                    awaitingResultForTicketId = null
+                                    webViewInstance?.goForward()
+                                },
                                 enabled = webViewInstance?.canGoForward() == true,
                                 modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Forward", modifier = Modifier.size(18.dp))
                             }
                             IconButton(
-                                onClick = { webViewInstance?.reload() },
+                                onClick = {
+                                    awaitingResultForTicketId = null
+                                    webViewInstance?.reload()
+                                },
                                 modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(Icons.Default.Refresh, contentDescription = "Reload", modifier = Modifier.size(18.dp))
@@ -480,7 +492,10 @@ fun BatchSubmissionScreen(
                                     shape = RoundedCornerShape(8.dp),
                                     color = LotteryEmerald.copy(alpha = 0.2f),
                                     modifier = Modifier
-                                        .clickable { webViewInstance?.loadUrl(currentPromotion.portalUrl) }
+                                        .clickable {
+                                            awaitingResultForTicketId = null
+                                            webViewInstance?.loadUrl(currentPromotion.portalUrl)
+                                        }
                                         .testTag("promotion_portal_chip")
                                 ) {
                                     Text(
@@ -496,6 +511,7 @@ fun BatchSubmissionScreen(
                                 shape = RoundedCornerShape(8.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant,
                                 modifier = Modifier.clickable {
+                                    awaitingResultForTicketId = null
                                     webViewInstance?.loadUrl(IllinoisLotteryGames.SECOND_CHANCE_ZONE_URL)
                                 }
                             ) {
@@ -511,6 +527,7 @@ fun BatchSubmissionScreen(
                                 shape = RoundedCornerShape(8.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant,
                                 modifier = Modifier.clickable {
+                                    awaitingResultForTicketId = null
                                     webViewInstance?.loadUrl(IllinoisLotteryGames.SECOND_CHANCE_LOGIN_URL)
                                 }
                             ) {
