@@ -18,6 +18,10 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +30,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -373,23 +378,34 @@ fun BatchSubmissionScreen(
                                 Spacer(modifier = Modifier.height(10.dp))
 
                                 // Automation Action Buttons
+                                // Auto-Fill gets its own full-width row so its label never gets cut off,
+                                // even with large system font sizes.
+                                Button(
+                                    onClick = { startAutoFill(currentTicket) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = LotteryEmerald),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 44.dp)
+                                        .testTag("auto_fill_code_button")
+                                ) {
+                                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        "Auto-Fill Game & Code",
+                                        color = Color.Black,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    // Auto-Fill Code & Submit
-                                    Button(
-                                        onClick = { startAutoFill(currentTicket) },
-                                        colors = ButtonDefaults.buttonColors(containerColor = LotteryEmerald),
-                                        modifier = Modifier
-                                            .weight(1.3f)
-                                            .height(44.dp)
-                                            .testTag("auto_fill_code_button")
-                                    ) {
-                                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(6.dp))
-                                        Text("Auto-Fill Code", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 13.sp)
-                                    }
 
                                     // Auto-Login
                                     OutlinedButton(
@@ -413,14 +429,15 @@ fun BatchSubmissionScreen(
                                                 }
                                             }
                                         },
+                                        contentPadding = PaddingValues(horizontal = 10.dp),
                                         modifier = Modifier
                                             .weight(1f)
-                                            .height(44.dp)
+                                            .heightIn(min = 44.dp)
                                             .testTag("auto_login_button")
                                     ) {
                                         Icon(Icons.Default.Key, contentDescription = null, tint = LuckyGold, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Auto-Login", fontSize = 12.sp)
+                                        Text("Log In", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
 
                                     // Mark Submitted & Advance
@@ -432,14 +449,22 @@ fun BatchSubmissionScreen(
                                             Toast.makeText(context, "Marked as entered! Next ticket queued.", Toast.LENGTH_SHORT).show()
                                         },
                                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
+                                        contentPadding = PaddingValues(horizontal = 10.dp),
                                         modifier = Modifier
-                                            .weight(1.2f)
-                                            .height(44.dp)
+                                            .weight(1f)
+                                            .heightIn(min = 44.dp)
                                             .testTag("mark_submitted_button")
                                     ) {
                                         Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Confirm & Next", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                        Text(
+                                            "Confirm & Next",
+                                            color = Color.Black,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
                                     }
                                 }
 
@@ -521,8 +546,14 @@ fun BatchSubmissionScreen(
                             }
                         }
 
-                        // Quick Navigation Chips
-                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        // Quick Navigation Chips: one line each; scroll sideways when they don't all fit.
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(start = 8.dp)
+                                .horizontalScroll(rememberScrollState())
+                        ) {
                             if (currentPromotion != null) {
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
@@ -538,6 +569,8 @@ fun BatchSubmissionScreen(
                                         text = currentPromotion.name,
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        softWrap = false,
                                         color = LotteryEmerald,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                     )
@@ -555,6 +588,8 @@ fun BatchSubmissionScreen(
                                     text = "2nd Chance Zone",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    softWrap = false,
                                     color = LotteryEmerald,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
@@ -571,6 +606,8 @@ fun BatchSubmissionScreen(
                                     text = "Login",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    softWrap = false,
                                     color = LuckyGold,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                 )
@@ -618,7 +655,24 @@ fun BatchSubmissionScreen(
                         }
 
                         webViewClient = object : WebViewClient() {
+                            // The portal sometimes redirects to plain http://, which Android blocks
+                            // (ERR_CLEARTEXT_NOT_PERMITTED). Send those to the https:// address instead.
+                            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                val secure = IllinoisLotteryGames.upgradeToHttps(request?.url?.toString())
+                                if (secure != null && request?.isForMainFrame == true) {
+                                    view?.loadUrl(secure)
+                                    return true
+                                }
+                                return false
+                            }
+
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                val secure = IllinoisLotteryGames.upgradeToHttps(url)
+                                if (secure != null) {
+                                    view?.stopLoading()
+                                    view?.loadUrl(secure)
+                                    return
+                                }
                                 isPageLoading = true
                                 url?.let { currentWebUrl = it }
                             }

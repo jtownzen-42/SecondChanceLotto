@@ -79,25 +79,25 @@ object IllinoisLotteryGames {
      *
      * Entry-code letters: every entry code is 1 letter + 10 digits, and each game in a promotion
      * gets its own letter in game-number order (Crossword family A-D, holiday family E-I).
-     * "confirmed" = seen on a real ticket (Jason's photos, 2026-11-09); the rest follow the pattern
+     * "confirmed" = seen on a real ticket (Jason's tickets, 2026-11-09 and 11-13); the rest follow the pattern
      * and should be confirmed when a ticket of that game is scanned. Keep docs/second-chance-games.md
      * in step with this list.
      */
     val activeGames: List<LotteryGame> = listOf(
         // 12 Weeks of Winning (2026 holiday tickets)
         LotteryGame("7675", "Holiday Ca\$h", "\$1", "\$500", TWELVE_WEEKS_OF_WINNING,
-            entryCodeLetter = "E"),
+            entryCodeLetter = "E", entryCodeLetterConfirmed = true),
         LotteryGame("7676", "Reindeer Riches", "\$2", "\$50,000", TWELVE_WEEKS_OF_WINNING,
             entryCodeLetter = "F", entryCodeLetterConfirmed = true),
         LotteryGame("7677", "Winter Winnings", "\$5", "\$250,000", TWELVE_WEEKS_OF_WINNING,
-            entryCodeLetter = "G"),
+            entryCodeLetter = "G", entryCodeLetterConfirmed = true),
         LotteryGame("7678", "Treemendous Cash", "\$10", "\$500,000", TWELVE_WEEKS_OF_WINNING,
             entryCodeLetter = "H", entryCodeLetterConfirmed = true),
         LotteryGame("7679", "Snowfall Mega Multiplier", "\$20", "\$1,000,000", TWELVE_WEEKS_OF_WINNING,
             entryCodeLetter = "I"),
         // Crossword Millionaire Bonus (2026 crossword family)
         LotteryGame("7662", "Bonus Word Crossword", "\$3", "\$50,000", CROSSWORD_MILLIONAIRE_BONUS,
-            entryCodeLetter = "A"),
+            entryCodeLetter = "A", entryCodeLetterConfirmed = true),
         LotteryGame("7663", "\$100,000 Crossword", "\$5", "\$100,000", CROSSWORD_MILLIONAIRE_BONUS,
             entryCodeLetter = "B", entryCodeLetterConfirmed = true),
         LotteryGame("7664", "\$250,000 Crossword", "\$10", "\$250,000", CROSSWORD_MILLIONAIRE_BONUS,
@@ -170,6 +170,21 @@ object IllinoisLotteryGames {
      * code doesn't start with a letter or no single game uses it. Used when the ticket's title and
      * game number can't be read (script titles such as Treemendous Cash defeat OCR).
      */
+    private const val PORTAL_HOST = "illinois.secondchancebonuszone.com"
+
+    /**
+     * The https:// form of a plain http:// 2nd Chance Zone address, or null when [url] isn't one.
+     * The portal sometimes redirects to http://, which Android's WebView refuses to load.
+     */
+    fun upgradeToHttps(url: String?): String? {
+        if (url == null || !url.startsWith("http://", ignoreCase = true)) return null
+        // Parse properly so "http://portal:80@other.host/" is seen as other.host, not the portal.
+        val uri = try { java.net.URI(url) } catch (e: java.net.URISyntaxException) { return null }
+        if (uri.rawUserInfo != null || !PORTAL_HOST.equals(uri.host, ignoreCase = true)) return null
+        if (uri.port != -1 && uri.port != 80) return null
+        return "https://" + url.substring("http://".length).replaceFirst(Regex("^[^/?#]*"), PORTAL_HOST)
+    }
+
     fun findGameByEntryCode(entryCode: String): LotteryGame? {
         val letter = entryCode.trim().firstOrNull()?.takeIf { it.isLetter() }?.uppercase() ?: return null
         return activeGames.filter { it.entryCodeLetter == letter }.singleOrNull()

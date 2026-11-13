@@ -76,4 +76,25 @@ class GameSelectionTest {
         val js = SubmissionAutomationHelper.generateCodeSubmissionScript("A1234567890", "7662", "Bob's Game")
         assertTrue(js.contains("TITLE = 'Bob\\'s Game'"))
     }
+
+    @Test
+    fun plainHttpPortalLinks_areUpgradedToHttps() {
+        assertEquals(
+            "https://illinois.secondchancebonuszone.com/",
+            IllinoisLotteryGames.upgradeToHttps("http://illinois.secondchancebonuszone.com/")
+        )
+        assertEquals(
+            "https://illinois.secondchancebonuszone.com/2ndchance/enter?x=1",
+            IllinoisLotteryGames.upgradeToHttps("HTTP://illinois.secondchancebonuszone.com/2ndchance/enter?x=1")
+        )
+        assertNull(IllinoisLotteryGames.upgradeToHttps("https://illinois.secondchancebonuszone.com/"))
+        assertNull(IllinoisLotteryGames.upgradeToHttps("http://example.com/"))
+        assertNull(IllinoisLotteryGames.upgradeToHttps("http://illinois.secondchancebonuszone.com.evil.test/"))
+        assertNull(IllinoisLotteryGames.upgradeToHttps("http://illinois.secondchancebonuszone.com:80@evil.example/"))
+        assertEquals(
+            "https://illinois.secondchancebonuszone.com/x",
+            IllinoisLotteryGames.upgradeToHttps("http://illinois.secondchancebonuszone.com:80/x")
+        )
+        assertNull(IllinoisLotteryGames.upgradeToHttps(null))
+    }
 }
