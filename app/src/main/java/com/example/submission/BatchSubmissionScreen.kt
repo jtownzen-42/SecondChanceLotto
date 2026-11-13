@@ -1,5 +1,6 @@
 package com.example.submission
 
+import com.example.data.IllinoisLotteryGames
 import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -103,7 +104,7 @@ fun BatchSubmissionScreen(
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
     var pageLoadProgress by remember { mutableFloatStateOf(0f) }
     var isPageLoading by remember { mutableStateOf(false) }
-    var currentWebUrl by remember { mutableStateOf("https://www.illinoislottery.com/second-chance") }
+    var currentWebUrl by remember { mutableStateOf(IllinoisLotteryGames.SECOND_CHANCE_ZONE_URL) }
     var lastAutomationStatus by remember { mutableStateOf<String?>(null) }
     var isHudExpanded by remember { mutableStateOf(true) }
 
@@ -405,7 +406,7 @@ fun BatchSubmissionScreen(
                                 shape = RoundedCornerShape(8.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant,
                                 modifier = Modifier.clickable {
-                                    webViewInstance?.loadUrl("https://www.illinoislottery.com/second-chance")
+                                    webViewInstance?.loadUrl(IllinoisLotteryGames.SECOND_CHANCE_ZONE_URL)
                                 }
                             ) {
                                 Text(
@@ -420,7 +421,7 @@ fun BatchSubmissionScreen(
                                 shape = RoundedCornerShape(8.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant,
                                 modifier = Modifier.clickable {
-                                    webViewInstance?.loadUrl("https://www.illinoislottery.com/login")
+                                    webViewInstance?.loadUrl(IllinoisLotteryGames.SECOND_CHANCE_LOGIN_URL)
                                 }
                             ) {
                                 Text(
@@ -507,7 +508,7 @@ fun BatchSubmissionScreen(
                             }
                         }
 
-                        loadUrl("https://www.illinoislottery.com/second-chance")
+                        loadUrl(IllinoisLotteryGames.SECOND_CHANCE_ZONE_URL)
                         webViewInstance = this
                     }
                 },

@@ -85,6 +85,8 @@ import coil.compose.AsyncImage
 import com.example.data.IllinoisLotteryGames
 import com.example.data.LotteryTicket
 import com.example.data.TicketStatus
+import com.example.ui.ConfirmUnusualCodeDialog
+import com.example.ui.EntryCodeField
 import com.example.ui.theme.LotteryEmerald
 import com.example.ui.theme.LuckyGold
 import com.google.mlkit.vision.common.InputImage
@@ -416,7 +418,7 @@ fun CameraScannerScreen(
                     Spacer(modifier = Modifier.height(12.dp))
 
                     Text(
-                        text = "Targeting 10-14 digit validation code under scratch-off latex",
+                        text = "Targeting the ENTRY CODE (1 letter + 10 digits) under the scratch-off",
                         color = Color.LightGray.copy(alpha = 0.85f),
                         fontSize = 12.sp,
                         textAlign = TextAlign.Center
@@ -542,14 +544,16 @@ fun TicketReviewSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    var selectedGameNumber by remember { mutableStateOf(initialData.gameNumber.ifEmpty { "852" }) }
-    var selectedGameTitle by remember { mutableStateOf(initialData.gameName.ifEmpty { "$100,000 Frenzy" }) }
+    // No made-up default: if the scan didn't recognise the game, the user must pick it.
+    var selectedGameNumber by remember { mutableStateOf(initialData.gameNumber) }
+    var selectedGameTitle by remember { mutableStateOf(initialData.gameName) }
     var packNumber by remember { mutableStateOf(initialData.packNumber) }
     var ticketNumber by remember { mutableStateOf(initialData.ticketNumber) }
     var entryCode by remember { mutableStateOf(initialData.entryCode) }
     var drawingDeadline by remember { mutableStateOf(initialData.drawingDeadline) }
     var notes by remember { mutableStateOf("") }
     var gameDropdownExpanded by remember { mutableStateOf(false) }
+    var confirmUnusualCode by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -605,36 +609,40 @@ fun TicketReviewSheet(
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
-            // Entry Code Input (Highest Priority)
-            OutlinedTextField(
+            // Entry Code Input (Highest Priority). The scan's warning stays until the user edits the code.
+            EntryCodeField(
                 value = entryCode,
-                onValueChange = { entryCode = it.replace(" ", "").uppercase() },
-                label = { Text("Second Chance Entry Code (10-14 Digits)") },
-                modifier = Modifier.fillMaxWidth().testTag("review_entry_code_input"),
-                textStyle = MaterialTheme.typography.titleMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontWeight = FontWeight.Bold,
-                    color = LotteryEmerald
-                ),
-                singleLine = true,
-                isError = entryCode.length !in 10..14,
-                supportingText = {
-                    Text(
-                        text = if (entryCode.length in 10..14) "Valid code length (${entryCode.length} characters)" else "Must be 10-14 characters",
-                        color = if (entryCode.length in 10..14) LotteryEmerald else MaterialTheme.colorScheme.error
-                    )
-                }
+                onValueChange = { entryCode = it },
+                modifier = Modifier.testTag("review_entry_code_input"),
+                reviewReason = if (entryCode == initialData.entryCode && initialData.codeNeedsReview) {
+                    initialData.codeReviewReason
+                } else {
+                    ""
+                },
+                emptyHint = "Not found in the photo. Type the 1 letter + 10 digits from the ENTRY CODE box"
             )
 
             Spacer(modifier = Modifier.height(12.dp))
 
             // Game Selection Dropdown
             Box(modifier = Modifier.fillMaxWidth()) {
+                val knownGame = IllinoisLotteryGames.findGameByNumber(selectedGameNumber)
                 OutlinedTextField(
-                    value = "$selectedGameTitle (#$selectedGameNumber)",
+                    value = if (selectedGameNumber.isBlank()) "Select the game on your ticket" else "$selectedGameTitle (#$selectedGameNumber)",
                     onValueChange = {},
                     readOnly = true,
                     label = { Text("Illinois Instant Game") },
+                    isError = knownGame?.isSecondChanceEligible != true,
+                    supportingText = {
+                        Text(
+                            when {
+                                selectedGameNumber.isBlank() -> "Game not recognised. Pick it from the list."
+                                knownGame == null -> "Game #$selectedGameNumber isn't a known Illinois game. Pick it from the list."
+                                knownGame.promotion == null -> "This game has no open 2nd Chance promotion."
+                                else -> "${knownGame.promotion.name} • enter by ${knownGame.promotion.finalEntryDeadline}"
+                            }
+                        )
+                    },
                     trailingIcon = {
                         IconButton(onClick = { gameDropdownExpanded = true }) {
                             Icon(Icons.Default.ArrowDropDown, contentDescription = null)
@@ -656,7 +664,7 @@ fun TicketReviewSheet(
                                 Column {
                                     Text(game.title, fontWeight = FontWeight.Bold)
                                     Text(
-                                        "Game #${game.gameNumber} • ${game.ticketPrice} • Due ${game.drawingDeadline}",
+                                        "Game #${game.gameNumber} • ${game.ticketPrice} • ${game.promotion?.name} • enter by ${game.drawingDeadline}",
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                 }
@@ -705,23 +713,36 @@ fun TicketReviewSheet(
 
             Spacer(modifier = Modifier.height(24.dp))
 
+            val saveTicket = {
+                val ticket = LotteryTicket(
+                    gameNumber = selectedGameNumber,
+                    gameName = selectedGameTitle,
+                    packNumber = packNumber,
+                    ticketNumber = ticketNumber,
+                    entryCode = entryCode,
+                    imageUri = photoUri,
+                    drawingDeadline = drawingDeadline,
+                    expirationDate = drawingDeadline,
+                    status = TicketStatus.PENDING,
+                    notes = notes
+                )
+                onSave(ticket)
+            }
+
+            if (confirmUnusualCode) {
+                ConfirmUnusualCodeDialog(
+                    code = entryCode,
+                    onConfirm = { confirmUnusualCode = false; saveTicket() },
+                    onDismiss = { confirmUnusualCode = false }
+                )
+            }
+
             Button(
                 onClick = {
-                    val ticket = LotteryTicket(
-                        gameNumber = selectedGameNumber,
-                        gameName = selectedGameTitle,
-                        packNumber = packNumber,
-                        ticketNumber = ticketNumber,
-                        entryCode = entryCode,
-                        imageUri = photoUri,
-                        drawingDeadline = drawingDeadline,
-                        expirationDate = drawingDeadline,
-                        status = TicketStatus.PENDING,
-                        notes = notes
-                    )
-                    onSave(ticket)
+                    if (LotteryCodeParser.isValidEntryCode(entryCode)) saveTicket() else confirmUnusualCode = true
                 },
-                enabled = entryCode.isNotBlank(),
+                enabled = entryCode.isNotBlank() &&
+                    IllinoisLotteryGames.findGameByNumber(selectedGameNumber)?.isSecondChanceEligible == true,
                 colors = ButtonDefaults.buttonColors(containerColor = LotteryEmerald),
                 modifier = Modifier.fillMaxWidth().height(52.dp).testTag("save_ticket_to_batch_button")
             ) {
@@ -810,7 +831,8 @@ private fun processImageUriWithTargetedRegion(
                         .addOnSuccessListener { fullVisionText ->
                             val parsed = LotteryCodeParser.parseWithTargetedRegion(
                                 targetedRegionText = regionVisionText.text,
-                                fullFrameText = fullVisionText.text
+                                fullFrameText = fullVisionText.text,
+                                symbolLines = LotteryCodeParser.symbolLinesOf(regionVisionText, fullVisionText)
                             )
                             onComplete(parsed, localFile.absolutePath)
                         }

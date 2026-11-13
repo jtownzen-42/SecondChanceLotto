@@ -62,10 +62,137 @@ data class ParsedLotteryData(
     val drawingDeadline: String = "",
     val rawText: String = "",
     val targetedRegionText: String = "",
-    val isConfident: Boolean = false
+    val isConfident: Boolean = false,
+    /** True when the code was guessed or corrected and the user should compare it with the ticket. */
+    val codeNeedsReview: Boolean = false,
+    /** Human-readable reason shown on the review sheet when [codeNeedsReview] is true. */
+    val codeReviewReason: String = ""
+)
+
+/** One recognised character from ML Kit with its confidence (0..1). */
+data class OcrSymbol(val text: String, val confidence: Float)
+
+/** An entry code found in OCR text, with where it sits in the searched string. */
+internal data class EntryCodeMatch(
+    val code: String,
+    /** Index in the searched string of each of the 11 code characters. */
+    val sourceIndices: List<Int>,
+    /** True if letters in digit positions were converted (e.g. O to 0). */
+    val substituted: Boolean
 )
 
 object LotteryCodeParser {
+
+    /** Real Illinois 2nd Chance entry codes: one letter followed by ten digits. */
+    private val VALID_ENTRY_CODE = Regex("""^[A-Z]\d{10}$""")
+
+    /** Characters ML Kit commonly returns for a digit, mapped to that digit. */
+    private val DIGIT_CONFUSIONS = mapOf(
+        'O' to '0', 'D' to '0', 'Q' to '0', 'Ø' to '0',
+        'I' to '1', 'L' to '1', '|' to '1', '!' to '1',
+        'S' to '5', 'B' to '8', 'Z' to '2'
+    )
+
+    /** Below this, a recognised 8 is treated as the ticket's slashed zero (which OCR often reads as 8). */
+    internal const val SLASHED_ZERO_MAX_CONFIDENCE = 0.45f
+
+    /** Digits other than 0 below this confidence are flagged for the user to double-check. */
+    internal const val LOW_DIGIT_CONFIDENCE = 0.40f
+
+    fun isValidEntryCode(code: String): Boolean = VALID_ENTRY_CODE.matches(code)
+
+    /** Normalises what the user types: drops spaces and hyphens, upper-cases, maps Ø to 0. */
+    fun normalizeEntryCodeInput(input: String): String =
+        input.filterNot { it.isWhitespace() || it == '-' }.uppercase().replace('Ø', '0')
+
+    /**
+     * Finds a "1 letter + 10 digits" entry code in [text]. Spaces or hyphens may split it, a stray
+     * I / l / | or punctuation (often the printed box edge) may precede the letter, and common OCR
+     * confusions in digit positions are corrected.
+     */
+    internal fun findStrictEntryCode(text: String): EntryCodeMatch? {
+        val s = text.uppercase()
+        for (start in s.indices) {
+            val letter = s[start]
+            if (!letter.isLetter() || letter == 'Ø') continue
+            // The code must not continue a longer word or number, except for a stray edge character.
+            if (start > 0) {
+                val prev = s[start - 1]
+                val prevIsStray = prev == 'I' || prev == '|' || prev == 'L' || prev == '1'
+                val prevPrev = if (start > 1) s[start - 2] else ' '
+                if (prev.isLetterOrDigit() && !(prevIsStray && !prevPrev.isLetterOrDigit())) continue
+            }
+            val indices = mutableListOf(start)
+            val digits = StringBuilder()
+            var substituted = false
+            var realDigits = 0
+            var i = start + 1
+            while (i < s.length && digits.length < 10) {
+                val c = s[i]
+                when {
+                    c.isDigit() -> { digits.append(c); realDigits++; indices.add(i) }
+                    DIGIT_CONFUSIONS.containsKey(c) -> {
+                        digits.append(DIGIT_CONFUSIONS.getValue(c)); indices.add(i)
+                        if (c != 'Ø') substituted = true else realDigits++
+                    }
+                    // Allow single separators inside the code, but not two in a row.
+                    (c == ' ' || c == '-') && i + 1 < s.length && s[i + 1] != ' ' && s[i + 1] != '-' -> Unit
+                    else -> break
+                }
+                i++
+            }
+            if (digits.length < 10 || realDigits < 7) continue
+            // Must not run on into more digits (that would be a longer number, not a code).
+            if (i < s.length && s[i].isDigit()) continue
+            return EntryCodeMatch("$letter$digits", indices, substituted)
+        }
+        return null
+    }
+
+    /**
+     * Uses ML Kit's per-character confidence to fix the one misread seen on real tickets: the
+     * printed slashed zero read as 8. Returns the refined code and a review reason (blank if none).
+     */
+    internal fun refineWithSymbols(code: String, symbolLines: List<List<OcrSymbol>>): Pair<String, String> {
+        for (line in symbolLines) {
+            if (line.any { it.text.length != 1 }) continue
+            val match = findStrictEntryCode(line.joinToString("") { it.text }) ?: continue
+            if (match.code != code) continue
+            val chars = code.toCharArray()
+            val reasons = mutableListOf<String>()
+            for (pos in 1 until chars.size) {
+                val conf = line[match.sourceIndices[pos]].confidence
+                if (chars[pos] == '8' && conf < SLASHED_ZERO_MAX_CONFIDENCE) {
+                    chars[pos] = '0'
+                    reasons += "digit ${pos + 1} was unclear (8 or slashed 0); we used 0"
+                } else if (chars[pos] != '0' && conf < LOW_DIGIT_CONFIDENCE) {
+                    reasons += "digit ${pos + 1} (${chars[pos]}) was hard to read"
+                }
+            }
+            return String(chars) to reasons.joinToString("; ")
+        }
+        return code to ""
+    }
+
+    /** Collects per-line character confidences from ML Kit results for [refineWithSymbols]. */
+    fun symbolLinesOf(vararg texts: Text): List<List<OcrSymbol>> =
+        texts.flatMap { t ->
+            t.textBlocks.flatMap { b -> b.lines }.map { line ->
+                line.elements.flatMap { e -> e.symbols }.map { OcrSymbol(it.text, it.confidence) }
+            }
+        }
+
+    /**
+     * The printed ticket number: a line that is exactly three digits (e.g. "042"). If OCR saw more
+     * than one, the most frequent wins, then the last one.
+     */
+    internal fun findStandaloneTicketNumber(rawText: String): String {
+        val candidates = rawText.lines().map { it.trim() }.filter { Regex("""^\d{3}$""").matches(it) }
+        if (candidates.isEmpty()) return ""
+        val counts = candidates.groupingBy { it }.eachCount()
+        val best = counts.values.max()
+        return candidates.last { counts[it] == best }
+    }
 
     // Regex patterns for Illinois instant scratch tickets
     private val ENTRY_CODE_REGEX = Regex("""(?i)\b([0-9A-Z]{10,14})\b""")
@@ -133,7 +260,8 @@ object LotteryCodeParser {
         val roiText = extractTextInRegion(visionText, imageWidth, imageHeight, targetRegion)
         return parseWithTargetedRegion(
             targetedRegionText = roiText,
-            fullFrameText = visionText.text
+            fullFrameText = visionText.text,
+            symbolLines = symbolLinesOf(visionText)
         )
     }
 
@@ -143,12 +271,28 @@ object LotteryCodeParser {
      */
     fun parseWithTargetedRegion(
         targetedRegionText: String,
-        fullFrameText: String
+        fullFrameText: String,
+        symbolLines: List<List<OcrSymbol>> = emptyList()
     ): ParsedLotteryData {
         val roiParsed = parse(targetedRegionText)
         val fullParsed = parse(fullFrameText)
 
-        val chosenEntryCode = roiParsed.entryCode.ifEmpty { fullParsed.entryCode }
+        // A real-format code anywhere beats a fallback guess; otherwise the targeted region wins.
+        val codeSource = when {
+            roiParsed.entryCode.isNotEmpty() && roiParsed.isConfident -> roiParsed
+            fullParsed.entryCode.isNotEmpty() && fullParsed.isConfident -> fullParsed
+            roiParsed.entryCode.isNotEmpty() && !roiParsed.codeNeedsReview -> roiParsed
+            fullParsed.entryCode.isNotEmpty() && !fullParsed.codeNeedsReview -> fullParsed
+            roiParsed.entryCode.isNotEmpty() -> roiParsed
+            else -> fullParsed
+        }
+        val (chosenEntryCode, symbolReason) = if (isValidEntryCode(codeSource.entryCode)) {
+            refineWithSymbols(codeSource.entryCode, symbolLines)
+        } else {
+            codeSource.entryCode to ""
+        }
+        val reviewReason = listOf(codeSource.codeReviewReason, symbolReason)
+            .filter { it.isNotEmpty() }.joinToString(". ")
         val chosenGameNumber = fullParsed.gameNumber.ifEmpty { roiParsed.gameNumber }
         val chosenGameName = if (fullParsed.gameNumber.isNotEmpty()) fullParsed.gameName else roiParsed.gameName
         val chosenPack = roiParsed.packNumber.ifEmpty { fullParsed.packNumber }
@@ -164,7 +308,9 @@ object LotteryCodeParser {
             drawingDeadline = chosenDeadline,
             rawText = fullFrameText,
             targetedRegionText = targetedRegionText,
-            isConfident = chosenEntryCode.isNotEmpty()
+            isConfident = chosenEntryCode.isNotEmpty() && codeSource.isConfident && reviewReason.isEmpty(),
+            codeNeedsReview = reviewReason.isNotEmpty(),
+            codeReviewReason = reviewReason
         )
     }
 
@@ -176,20 +322,12 @@ object LotteryCodeParser {
         var ticketNum = ""
         var entryCode = ""
 
-        // 1. Check if known game titles appear in the text
-        for (game in IllinoisLotteryGames.activeGames) {
-            val titleWords = game.title.lowercase().split(" ")
-            val containsTitle = titleWords.any { word ->
-                word.length > 3 && rawText.lowercase().contains(word)
-            }
-            if (containsTitle) {
-                detectedGame = game
-                gameNum = game.gameNumber
-                break
-            }
-        }
+        // 1. Check if a known game's full title appears in the text (longest title wins)
+        // Kept separate from gameNum so a printed "GAME ####" is still parsed below and can override it.
+        val titleGame = IllinoisLotteryGames.findGameInText(rawText)
+        detectedGame = titleGame
 
-        // 2. Check for GAME-PACK-TICKET formatted string e.g., "852-04821-014" or "GAME 852 - PACK 04821 - TICKET 014"
+        // 2. Check for GAME-PACK-TICKET formatted string e.g., "7676-04821-014" or "GAME 7676 - PACK 04821 - TICKET 014"
         val gamePackTicketRegex = Regex("""(?i)\b(?:game\s*[:#]?\s*)?(\d{3,4})[\s\-]+(?:pack\s*[:#]?\s*)?(\d{5})[\s\-]+(?:ticket\s*[:#]?\s*)?(\d{3})\b""")
         val gamePackTicketMatch = gamePackTicketRegex.find(rawText)
         if (gamePackTicketMatch != null) {
@@ -221,8 +359,27 @@ object LotteryCodeParser {
             }
         }
 
-        // 3. Search for Entry Code (10 to 14 characters)
-        val hyphenatedMatch = HYPHENATED_CODE_REGEX.findAll(rawText).firstOrNull { match ->
+        // A printed game number that matches a known game beats the title guess; an unknown
+        // number (often an OCR slip) yields to the title match.
+        val numberGame = if (gameNum.isNotEmpty()) IllinoisLotteryGames.findGameByNumber(gameNum) else null
+        if (numberGame != null) {
+            detectedGame = numberGame
+        } else if (titleGame != null) {
+            gameNum = titleGame.gameNumber
+        }
+
+        // 3. Search for the entry code. Real codes are 1 letter + 10 digits; look for that first.
+        var strictCode = false
+        var substituted = false
+        val strict = lines.firstNotNullOfOrNull { findStrictEntryCode(it) } ?: findStrictEntryCode(rawText)
+        if (strict != null) {
+            entryCode = strict.code
+            strictCode = true
+            substituted = strict.substituted
+        }
+
+        // Older 10-14 character fallback, only for codes that don't fit the real format.
+        val hyphenatedMatch = if (entryCode.isNotEmpty()) null else HYPHENATED_CODE_REGEX.findAll(rawText).firstOrNull { match ->
             val cleaned = match.value.replace("-", "").replace(" ", "").uppercase()
             cleaned.length in 10..14 && cleaned.count { it.isDigit() } >= 8
         }
@@ -275,7 +432,7 @@ object LotteryCodeParser {
         // Check if game number wasn't found yet
         if (gameNum.isEmpty()) {
             for (line in lines) {
-                val match = Regex("""\b(\d{3,4})\b""").find(line)
+                val match = Regex("""\b(\d{4})\b""").find(line)
                 if (match != null) {
                     val potentialGame = IllinoisLotteryGames.findGameByNumber(match.value)
                     if (potentialGame != null) {
@@ -287,9 +444,21 @@ object LotteryCodeParser {
             }
         }
 
+        // Ticket number printed on its own (e.g. "042" in a small box) when no label was found.
+        if (ticketNum.isEmpty()) {
+            ticketNum = findStandaloneTicketNumber(rawText)
+        }
+
         val gameTitle = detectedGame?.title
             ?: if (gameNum.isNotBlank()) "Illinois Scratch Game #$gameNum" else "Illinois Instant Ticket"
         val deadline = detectedGame?.drawingDeadline ?: "Check Official Site"
+
+        val reviewReason = when {
+            entryCode.isEmpty() -> ""
+            !strictCode -> "This doesn't look like a normal entry code (1 letter + 10 digits)"
+            substituted -> "Some characters were unclear and were corrected"
+            else -> ""
+        }
 
         return ParsedLotteryData(
             gameNumber = gameNum,
@@ -300,7 +469,9 @@ object LotteryCodeParser {
             drawingDeadline = deadline,
             rawText = rawText,
             targetedRegionText = rawText,
-            isConfident = entryCode.isNotEmpty()
+            isConfident = strictCode && !substituted,
+            codeNeedsReview = reviewReason.isNotEmpty(),
+            codeReviewReason = reviewReason
         )
     }
 
