@@ -178,9 +178,11 @@ object IllinoisLotteryGames {
      */
     fun upgradeToHttps(url: String?): String? {
         if (url == null || !url.startsWith("http://", ignoreCase = true)) return null
-        val rest = url.substring("http://".length)
-        val host = rest.substringBefore('/').substringBefore('?').substringBefore(':')
-        return if (host.equals(PORTAL_HOST, ignoreCase = true)) "https://$rest" else null
+        // Parse properly so "http://portal:80@other.host/" is seen as other.host, not the portal.
+        val uri = try { java.net.URI(url) } catch (e: java.net.URISyntaxException) { return null }
+        if (uri.rawUserInfo != null || !PORTAL_HOST.equals(uri.host, ignoreCase = true)) return null
+        if (uri.port != -1 && uri.port != 80) return null
+        return "https://" + url.substring("http://".length).replaceFirst(Regex("^[^/?#]*"), PORTAL_HOST)
     }
 
     fun findGameByEntryCode(entryCode: String): LotteryGame? {

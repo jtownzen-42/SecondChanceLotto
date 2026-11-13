@@ -90,6 +90,11 @@ class GameSelectionTest {
         assertNull(IllinoisLotteryGames.upgradeToHttps("https://illinois.secondchancebonuszone.com/"))
         assertNull(IllinoisLotteryGames.upgradeToHttps("http://example.com/"))
         assertNull(IllinoisLotteryGames.upgradeToHttps("http://illinois.secondchancebonuszone.com.evil.test/"))
+        assertNull(IllinoisLotteryGames.upgradeToHttps("http://illinois.secondchancebonuszone.com:80@evil.example/"))
+        assertEquals(
+            "https://illinois.secondchancebonuszone.com/x",
+            IllinoisLotteryGames.upgradeToHttps("http://illinois.secondchancebonuszone.com:80/x")
+        )
         assertNull(IllinoisLotteryGames.upgradeToHttps(null))
     }
 }
