@@ -84,6 +84,7 @@ fun SecondChanceApp(
     val allTickets by viewModel.allTickets.collectAsStateWithLifecycle()
     val pendingTickets by viewModel.pendingTickets.collectAsStateWithLifecycle()
     val userPreferences by viewModel.userPreferences.collectAsStateWithLifecycle()
+    val filterGameNumber by viewModel.filterGameNumber.collectAsStateWithLifecycle()
 
     var showManualEntryDialog by remember { mutableStateOf(false) }
     var showAccountSettingsDialog by remember { mutableStateOf(false) }
@@ -138,7 +139,7 @@ fun SecondChanceApp(
                     // Quick Add Ticket
                     IconButton(
                         onClick = {
-                            manualEntryInitialGame = null
+                            manualEntryInitialGame = if (currentTab == AppTab.VAULT) filterGameNumber else null
                             showManualEntryDialog = true
                         },
                         modifier = Modifier.testTag("top_bar_add_ticket_button")
@@ -305,6 +306,8 @@ fun SecondChanceApp(
                 AppTab.VAULT -> {
                     TicketVaultScreen(
                         tickets = allTickets,
+                        filterGameNumber = filterGameNumber,
+                        onClearGameFilter = { viewModel.clearFilterGame() },
                         onDeleteTicket = { ticket ->
                             viewModel.deleteTicket(ticket)
                             Toast.makeText(context, "Ticket deleted", Toast.LENGTH_SHORT).show()

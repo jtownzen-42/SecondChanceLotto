@@ -83,6 +83,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteTicket(ticket: LotteryTicket) {
         viewModelScope.launch {
             ticketRepository.deleteTicket(ticket)
+            val path = ticket.imageUri
+            if (!path.isNullOrBlank()) {
+                try {
+                    val file = java.io.File(path)
+                    if (file.exists() && file.parentFile?.canonicalPath == getApplication<Application>().filesDir.canonicalPath) {
+                        file.delete()
+                    }
+                } catch (_: Exception) {
+                }
+            }
         }
     }
 
@@ -109,5 +119,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setFilterGame(gameNumber: String?) {
         _filterGameNumber.value = gameNumber
         _currentTab.value = AppTab.VAULT
+    }
+
+    fun clearFilterGame() {
+        _filterGameNumber.value = null
     }
 }

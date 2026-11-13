@@ -57,13 +57,13 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -85,7 +85,6 @@ import com.example.ui.theme.LotteryEmerald
 import com.example.ui.theme.LuckyGold
 import com.example.ui.theme.StatusSubmitted
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -98,9 +97,9 @@ fun BatchSubmissionScreen(
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
 
     var currentQueueIndex by remember { mutableIntStateOf(0) }
+    var completedInSessionCount by remember { mutableIntStateOf(0) }
     var webViewInstance by remember { mutableStateOf<WebView?>(null) }
     var pageLoadProgress by remember { mutableFloatStateOf(0f) }
     var isPageLoading by remember { mutableStateOf(false) }
@@ -120,9 +119,50 @@ fun BatchSubmissionScreen(
         if (currentQueueIndex >= pendingTickets.size) {
             currentQueueIndex = 0
         }
+        if (pendingTickets.isEmpty()) {
+            awaitingResultForTicketId = null
+        }
+    }
+
+    // Poll DOM for SPA / XHR submission results that don't trigger a full page reload
+    LaunchedEffect(awaitingResultForTicketId) {
+        val targetId = awaitingResultForTicketId ?: return@LaunchedEffect
+        for (waitMs in listOf(900L, 900L, 1200L)) {
+            delay(waitMs)
+            if (awaitingResultForTicketId != targetId) return@LaunchedEffect
+            val wv = webViewInstance ?: break
+            wv.evaluateJavascript(SubmissionAutomationHelper.generateCheckSuccessScript()) { result ->
+                if (awaitingResultForTicketId != targetId) return@evaluateJavascript
+                when (SubmissionAutomationHelper.parsePortalResult(result)) {
+                    PortalResult.SUBMITTED -> {
+                        awaitingResultForTicketId = null
+                        completedInSessionCount++
+                        latestOnTicketSubmitted(targetId, null)
+                    }
+                    PortalResult.DUPLICATE -> {
+                        awaitingResultForTicketId = null
+                        completedInSessionCount++
+                        latestOnTicketDuplicate(targetId)
+                    }
+                    PortalResult.UNKNOWN -> Unit
+                }
+            }
+        }
+        if (awaitingResultForTicketId == targetId) {
+            awaitingResultForTicketId = null
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            webViewInstance?.stopLoading()
+        }
     }
 
     val currentTicket = pendingTickets.getOrNull(currentQueueIndex)
+    val currentPromotion = remember(currentTicket?.gameNumber) {
+        currentTicket?.let { IllinoisLotteryGames.findGameByNumber(it.gameNumber)?.promotion }
+    }
 
     Box(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -163,6 +203,21 @@ fun BatchSubmissionScreen(
                         }
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (pendingTickets.size > 1) {
+                                IconButton(
+                                    onClick = {
+                                        awaitingResultForTicketId = null
+                                        currentQueueIndex = (currentQueueIndex + 1) % pendingTickets.size
+                                    },
+                                    modifier = Modifier.testTag("skip_next_ticket_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.SkipNext,
+                                        contentDescription = "Skip to next ticket in queue",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                             IconButton(onClick = onConfigureCredentials) {
                                 Icon(
                                     imageVector = Icons.Default.Key,
@@ -181,7 +236,12 @@ fun BatchSubmissionScreen(
 
                     // Progress Bar
                     if (pendingTickets.isNotEmpty()) {
-                        val progress = (currentQueueIndex.toFloat()) / pendingTickets.size.toFloat()
+                        val totalBatch = pendingTickets.size + completedInSessionCount
+                        val progress = if (totalBatch > 0) {
+                            completedInSessionCount.toFloat() / totalBatch.toFloat()
+                        } else {
+                            0f
+                        }
                         LinearProgressIndicator(
                             progress = { progress },
                             modifier = Modifier
@@ -267,12 +327,18 @@ fun BatchSubmissionScreen(
                                             )
                                             val ticketId = currentTicket.id
                                             webViewInstance?.evaluateJavascript(js) { result ->
-                                                val status = result.removeSurrounding("\"")
+                                                val status = SubmissionAutomationHelper.unquoteJsString(result)
                                                 lastAutomationStatus = status
                                                 if (status.startsWith("SUCCESS")) {
                                                     awaitingResultForTicketId = ticketId
+                                                    Toast.makeText(context, "Code injected into entry form", Toast.LENGTH_SHORT).show()
+                                                } else {
+                                                    Toast.makeText(
+                                                        context,
+                                                        status.ifEmpty { "Could not locate entry field on this page" },
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
                                                 }
-                                                Toast.makeText(context, "Code injected into entry form", Toast.LENGTH_SHORT).show()
                                             }
                                         },
                                         colors = ButtonDefaults.buttonColors(containerColor = LotteryEmerald),
@@ -297,8 +363,14 @@ fun BatchSubmissionScreen(
                                                     userPreferences.accountPassword
                                                 )
                                                 webViewInstance?.evaluateJavascript(js) { result ->
-                                                    lastAutomationStatus = result.removeSurrounding("\"")
-                                                    Toast.makeText(context, "Attempting login with saved credentials", Toast.LENGTH_SHORT).show()
+                                                    val status = SubmissionAutomationHelper.unquoteJsString(result)
+                                                    lastAutomationStatus = status
+                                                    val message = if (status.startsWith("SUCCESS")) {
+                                                        "Attempting login with saved credentials"
+                                                    } else {
+                                                        status.ifEmpty { "Login fields not detected on current page" }
+                                                    }
+                                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                                                 }
                                             }
                                         },
@@ -316,6 +388,7 @@ fun BatchSubmissionScreen(
                                     Button(
                                         onClick = {
                                             awaitingResultForTicketId = null
+                                            completedInSessionCount++
                                             onTicketSubmitted(currentTicket.id, null)
                                             Toast.makeText(context, "Marked as entered! Next ticket queued.", Toast.LENGTH_SHORT).show()
                                         },
@@ -402,6 +475,23 @@ fun BatchSubmissionScreen(
 
                         // Quick Navigation Chips
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (currentPromotion != null) {
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = LotteryEmerald.copy(alpha = 0.2f),
+                                    modifier = Modifier
+                                        .clickable { webViewInstance?.loadUrl(currentPromotion.portalUrl) }
+                                        .testTag("promotion_portal_chip")
+                                ) {
+                                    Text(
+                                        text = currentPromotion.name,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = LotteryEmerald,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant,
@@ -489,16 +579,19 @@ fun BatchSubmissionScreen(
                                 // a success page can't mark a different ticket as entered.
                                 val ticketId = awaitingResultForTicketId ?: return
                                 evaluateJavascript(SubmissionAutomationHelper.generateCheckSuccessScript()) { result ->
+                                    if (awaitingResultForTicketId != ticketId) return@evaluateJavascript
                                     when (SubmissionAutomationHelper.parsePortalResult(result)) {
                                         PortalResult.SUBMITTED -> {
                                             awaitingResultForTicketId = null
+                                            completedInSessionCount++
                                             latestOnTicketSubmitted(ticketId, null)
                                         }
                                         PortalResult.DUPLICATE -> {
                                             awaitingResultForTicketId = null
+                                            completedInSessionCount++
                                             latestOnTicketDuplicate(ticketId)
                                         }
-                                        // Inconclusive: stop watching, so a later unrelated page can't
+                                        // Inconclusive: stop watching on page load, so a later unrelated page can't
                                         // mark this ticket. "Confirm & Next" still marks it by hand.
                                         PortalResult.UNKNOWN -> {
                                             awaitingResultForTicketId = null

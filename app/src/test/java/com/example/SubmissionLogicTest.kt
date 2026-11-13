@@ -22,4 +22,15 @@ class SubmissionLogicTest {
         assertEquals(PortalResult.UNKNOWN, SubmissionAutomationHelper.parsePortalResult("null"))
         assertEquals(PortalResult.UNKNOWN, SubmissionAutomationHelper.parsePortalResult(null))
     }
+
+    @Test
+    fun `unquoteJsString safely handles null, JSON null, and quoted strings`() {
+        assertEquals("", SubmissionAutomationHelper.unquoteJsString(null))
+        assertEquals("", SubmissionAutomationHelper.unquoteJsString("null"))
+        assertEquals("", SubmissionAutomationHelper.unquoteJsString("  "))
+        assertEquals(
+            "SUCCESS: Code injected into input field",
+            SubmissionAutomationHelper.unquoteJsString("\"SUCCESS: Code injected into input field\"")
+        )
+    }
 }
