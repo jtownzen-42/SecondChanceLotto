@@ -282,8 +282,8 @@ object LotteryCodeParser {
         fullFrameText: String,
         symbolLines: List<List<OcrSymbol>> = emptyList()
     ): ParsedLotteryData {
-        val roiParsed = parse(targetedRegionText)
-        val fullParsed = parse(fullFrameText)
+        val roiParsed = parseText(targetedRegionText)
+        val fullParsed = parseText(fullFrameText)
 
         // A real-format code anywhere beats a fallback guess; otherwise the targeted region wins.
         val codeSource = when {
@@ -315,7 +315,7 @@ object LotteryCodeParser {
         }
         val chosenDeadline = if (fullParsed.gameNumber.isNotEmpty()) fullParsed.drawingDeadline else roiParsed.drawingDeadline
 
-        return ParsedLotteryData(
+        return withGameFromCodeLetter(ParsedLotteryData(
             gameNumber = chosenGameNumber,
             gameName = chosenGameName,
             packNumber = chosenPack,
@@ -327,10 +327,27 @@ object LotteryCodeParser {
             isConfident = chosenEntryCode.isNotEmpty() && codeSource.isConfident && reviewReason.isEmpty(),
             codeNeedsReview = reviewReason.isNotEmpty(),
             codeReviewReason = reviewReason
+        ))
+    }
+
+    fun parse(rawText: String): ParsedLotteryData = withGameFromCodeLetter(parseText(rawText))
+
+    /**
+     * When neither the title nor the game number could be read, falls back to the game whose
+     * entry codes start with the code's letter (each open-promotion game has its own letter).
+     * Only real-format codes (1 letter + 10 digits) are trusted for this.
+     */
+    private fun withGameFromCodeLetter(parsed: ParsedLotteryData): ParsedLotteryData {
+        if (parsed.gameNumber.isNotEmpty() || !isValidEntryCode(parsed.entryCode)) return parsed
+        val game = IllinoisLotteryGames.findGameByEntryCode(parsed.entryCode) ?: return parsed
+        return parsed.copy(
+            gameNumber = game.gameNumber,
+            gameName = game.title,
+            drawingDeadline = game.drawingDeadline
         )
     }
 
-    fun parse(rawText: String): ParsedLotteryData {
+    private fun parseText(rawText: String): ParsedLotteryData {
         val lines = rawText.lines().map { it.trim() }.filter { it.isNotBlank() }
         var detectedGame: LotteryGame? = null
         var gameNum = ""
