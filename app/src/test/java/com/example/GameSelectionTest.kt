@@ -67,6 +67,9 @@ class GameSelectionTest {
         assertTrue(js.contains("TITLE = 'Reindeer Riches'"))
         assertTrue(js.contains("querySelectorAll('select')"))
         assertTrue(js.contains("NO_GAME"))
+        // The code box is found by its "Entry Code" label and typed into key by key.
+        assertTrue(js.contains("entry\\s*code"))
+        assertTrue(js.contains("KeyboardEvent('keyup'"))
         // The JS regex end anchor must survive Kotlin string templating.
         assertTrue(js.contains("[0-9]{4}\$/"))
     }

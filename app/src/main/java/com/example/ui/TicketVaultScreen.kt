@@ -84,6 +84,8 @@ fun TicketVaultScreen(
     tickets: List<LotteryTicket>,
     onDeleteTicket: (LotteryTicket) -> Unit,
     modifier: Modifier = Modifier,
+    /** Puts a submitted/duplicate ticket back in the Submit queue (e.g. it was marked by mistake). */
+    onRequeueTicket: (LotteryTicket) -> Unit = {},
     filterGameNumber: String? = null,
     onClearGameFilter: () -> Unit = {}
 ) {
@@ -286,7 +288,8 @@ fun TicketVaultScreen(
                             Toast.makeText(context, "Copied ${ticket.entryCode}", Toast.LENGTH_SHORT).show()
                         },
                         onViewPhoto = { ticketPhotoToView = ticket },
-                        onDelete = { ticketToDelete = ticket }
+                        onDelete = { ticketToDelete = ticket },
+                        onRequeue = { onRequeueTicket(ticket) }
                     )
                 }
             }
@@ -363,7 +366,8 @@ fun TicketVaultCard(
     ticket: LotteryTicket,
     onCopyCode: () -> Unit,
     onDelete: () -> Unit,
-    onViewPhoto: () -> Unit = {}
+    onViewPhoto: () -> Unit = {},
+    onRequeue: () -> Unit = {}
 ) {
     val dateFormat = remember { SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()) }
 
@@ -551,11 +555,20 @@ fun TicketVaultCard(
                 }
             }
 
-            // Delete action
+            // Actions: send back to the queue (for tickets not pending), delete
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                if (ticket.status != TicketStatus.PENDING) {
+                    TextButton(
+                        onClick = onRequeue,
+                        modifier = Modifier.testTag("requeue_ticket_${ticket.id}")
+                    ) {
+                        Text("Back to queue", style = MaterialTheme.typography.labelMedium, color = LuckyGold)
+                    }
+                }
                 IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
                     Icon(
                         imageVector = Icons.Default.Delete,

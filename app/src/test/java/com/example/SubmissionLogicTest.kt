@@ -18,6 +18,7 @@ class SubmissionLogicTest {
     fun `parsePortalResult reads the JSON string evaluateJavascript returns`() {
         assertEquals(PortalResult.SUBMITTED, SubmissionAutomationHelper.parsePortalResult("\"SUBMITTED\""))
         assertEquals(PortalResult.DUPLICATE, SubmissionAutomationHelper.parsePortalResult("\"DUPLICATE\""))
+        assertEquals(PortalResult.REJECTED, SubmissionAutomationHelper.parsePortalResult("\"REJECTED\""))
         assertEquals(PortalResult.UNKNOWN, SubmissionAutomationHelper.parsePortalResult("\"PENDING\""))
         assertEquals(PortalResult.UNKNOWN, SubmissionAutomationHelper.parsePortalResult("null"))
         assertEquals(PortalResult.UNKNOWN, SubmissionAutomationHelper.parsePortalResult(null))
