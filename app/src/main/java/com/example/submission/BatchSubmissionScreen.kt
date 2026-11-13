@@ -195,6 +195,9 @@ fun BatchSubmissionScreen(
                 ticket.gameNumber,
                 IllinoisLotteryGames.findGameByNumber(ticket.gameNumber)?.title ?: ticket.gameName
             )
+            // Also put the code on the clipboard, so it can be pasted by hand if the page refuses it.
+            (context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)
+                ?.setPrimaryClip(ClipData.newPlainText("Lottery Code", ticket.entryCode))
             var status = runJs(wv, js)
             if (status.startsWith("NO_FORM")) {
                 if (!currentWebUrl.contains("/2ndchance/enter")) {
@@ -216,6 +219,7 @@ fun BatchSubmissionScreen(
                     status.removePrefix("SUCCESS: ")
                 }
                 status.startsWith("NO_GAME") -> status.removePrefix("NO_GAME: ")
+                status.startsWith("NO_CODE_BOX") -> status.removePrefix("NO_CODE_BOX: ") + " (code copied)"
                 status.startsWith("NO_FORM") && currentWebUrl.contains("login", ignoreCase = true) ->
                     "Log in to the 2nd Chance Zone, then tap Auto-Fill again"
                 status.startsWith("NO_FORM") -> "Couldn't find the entry form. Open Enter Your Tickets and try again."
