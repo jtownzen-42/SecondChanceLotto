@@ -86,11 +86,11 @@ object IllinoisLotteryGames {
     val activeGames: List<LotteryGame> = listOf(
         // 12 Weeks of Winning (2026 holiday tickets)
         LotteryGame("7675", "Holiday Ca\$h", "\$1", "\$500", TWELVE_WEEKS_OF_WINNING,
-            entryCodeLetter = "E"),
+            entryCodeLetter = "E", entryCodeLetterConfirmed = true),
         LotteryGame("7676", "Reindeer Riches", "\$2", "\$50,000", TWELVE_WEEKS_OF_WINNING,
             entryCodeLetter = "F", entryCodeLetterConfirmed = true),
         LotteryGame("7677", "Winter Winnings", "\$5", "\$250,000", TWELVE_WEEKS_OF_WINNING,
-            entryCodeLetter = "G"),
+            entryCodeLetter = "G", entryCodeLetterConfirmed = true),
         LotteryGame("7678", "Treemendous Cash", "\$10", "\$500,000", TWELVE_WEEKS_OF_WINNING,
             entryCodeLetter = "H", entryCodeLetterConfirmed = true),
         LotteryGame("7679", "Snowfall Mega Multiplier", "\$20", "\$1,000,000", TWELVE_WEEKS_OF_WINNING,

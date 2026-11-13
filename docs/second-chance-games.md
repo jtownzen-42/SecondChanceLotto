@@ -8,9 +8,9 @@ Last checked against the live "Select game" list: **2026-11-13**.
 
 | Game name | Game # | Code letter | Letter status | Promotion | Final entry |
 |---|---|---|---|---|---|
-| Holiday Ca$h | 7675 | E | inferred | 12 Weeks of Winning | Jan 10, 2027 |
+| Holiday Ca$h | 7675 | E | confirmed | 12 Weeks of Winning | Jan 10, 2027 |
 | Reindeer Riches | 7676 | F | confirmed | 12 Weeks of Winning | Jan 10, 2027 |
-| Winter Winnings | 7677 | G | inferred | 12 Weeks of Winning | Jan 10, 2027 |
+| Winter Winnings | 7677 | G | confirmed | 12 Weeks of Winning | Jan 10, 2027 |
 | Treemendous Cash | 7678 | H | confirmed | 12 Weeks of Winning | Jan 10, 2027 |
 | Snowfall Mega Multiplier | 7679 | I | inferred | 12 Weeks of Winning | Jan 10, 2027 |
 | Bonus Word Crossword | 7662 | A | confirmed | Crossword Millionaire Bonus | Jun 20, 2027 |
