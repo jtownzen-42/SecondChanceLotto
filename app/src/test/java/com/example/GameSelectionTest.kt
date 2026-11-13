@@ -100,4 +100,43 @@ class GameSelectionTest {
         )
         assertNull(IllinoisLotteryGames.upgradeToHttps(null))
     }
+
+    @Test
+    fun lockout_isDetectedAndNeverSubmits() {
+        assertEquals(
+            com.example.submission.PortalResult.LOCKED,
+            SubmissionAutomationHelper.parsePortalResult("\"LOCKED\"")
+        )
+        assertEquals(
+            8,
+            SubmissionAutomationHelper.lockoutHours(
+                "You have exceeded the maximum number of unsuccessful entry attempts, 5. You may try again in 8 hours."
+            )
+        )
+        assertEquals(3, SubmissionAutomationHelper.lockoutHours("LOCKED: try again in 3 hours"))
+        assertEquals(8, SubmissionAutomationHelper.lockoutHours("no hours here"))
+        val js = SubmissionAutomationHelper.generateCodeSubmissionScript("C1234567890", "7664", "x")
+        assertTrue(js.contains(SubmissionAutomationHelper.LOCKOUT_PHRASE))
+        assertTrue(SubmissionAutomationHelper.generateCheckSuccessScript().contains(SubmissionAutomationHelper.LOCKOUT_PHRASE))
+    }
+
+    @Test
+    fun autoSubmit_isOffUnlessAsked() {
+        assertTrue(SubmissionAutomationHelper.generateCodeSubmissionScript("C1234567890", "7664").contains("AUTO_SUBMIT = false"))
+        assertTrue(
+            SubmissionAutomationHelper.generateCodeSubmissionScript("C1234567890", "7664", autoSubmit = true)
+                .contains("AUTO_SUBMIT = true")
+        )
+    }
+
+    @Test
+    fun resultCheck_reportsWhetherSubmitWasPressed() {
+        assertEquals(
+            com.example.submission.PortalResult.REJECTED,
+            SubmissionAutomationHelper.parsePortalResult("\"REJECTED|S\"")
+        )
+        assertTrue(SubmissionAutomationHelper.submitSeen("\"REJECTED|S\""))
+        assertTrue(!SubmissionAutomationHelper.submitSeen("\"REJECTED\""))
+        assertTrue(!SubmissionAutomationHelper.submitSeen(null))
+    }
 }

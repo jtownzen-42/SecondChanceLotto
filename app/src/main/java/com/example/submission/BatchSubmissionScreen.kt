@@ -71,6 +71,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -99,6 +100,12 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
 @SuppressLint("SetJavaScriptEnabled")
+/**
+ * When false (the default), Auto-Fill picks the game and types the code, and the user presses
+ * the site's Submit Entry. Every failed try counts toward the site's 5-try lockout.
+ */
+const val AUTO_SUBMIT_ENTRIES = false
+
 @Composable
 fun BatchSubmissionScreen(
     pendingTickets: List<LotteryTicket>,
@@ -136,6 +143,27 @@ fun BatchSubmissionScreen(
         }
     }
 
+    // --- Lockout guard -----------------------------------------------------------------
+    // The site allows 5 failed entry attempts, then blocks entries for hours. The app never
+    // submits while that block is on, and never retries a rejected code without asking.
+    val guardPrefs = remember { context.getSharedPreferences("portal_guard", Context.MODE_PRIVATE) }
+    var lockedUntilMillis by remember { mutableStateOf(guardPrefs.getLong("locked_until", 0L)) }
+    fun isLockedOut(): Boolean = System.currentTimeMillis() < lockedUntilMillis
+    fun lockedUntilText(): String =
+        java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(lockedUntilMillis))
+    fun recordLockout(hours: Int) {
+        val until = System.currentTimeMillis() + hours * 60L * 60L * 1000L
+        if (until > lockedUntilMillis) {
+            lockedUntilMillis = until
+            guardPrefs.edit().putLong("locked_until", until).apply()
+        }
+    }
+    // Tickets the site rejected in this session; Auto-Fill asks before trying them again.
+    val rejectedTicketIds = remember { mutableStateListOf<Long>() }
+    var confirmRetryFor by remember { mutableStateOf<LotteryTicket?>(null) }
+    // The result the page already showed when Auto-Fill ran; cleared when a new page loads.
+    var staleResultOnPage by remember { mutableStateOf<PortalResult?>(null) }
+
     // After a ticket is done, go straight back to Enter Your Tickets for the next one.
     fun openEntryFormForNextTicket(finishedTicketId: Long) {
         if (pendingTickets.any { it.id != finishedTicketId }) {
@@ -145,8 +173,11 @@ fun BatchSubmissionScreen(
 
     // A ticket is only marked entered when the site itself says the entry went in.
     // Returns true when the result was conclusive (the ticket is no longer being watched).
-    fun handlePortalResult(ticketId: Long, result: PortalResult): Boolean {
+    fun handlePortalResult(ticketId: Long, result: PortalResult, submitSeen: Boolean = false): Boolean {
         if (awaitingResultForTicketId != ticketId) return true
+        // A message that was already on the page before this attempt (e.g. an old error banner)
+        // says nothing about it, unless Submit has been pressed since (then it's the answer).
+        if (result == staleResultOnPage && !submitSeen) return false
         return when (result) {
             PortalResult.SUBMITTED -> {
                 awaitingResultForTicketId = null
@@ -168,8 +199,21 @@ fun BatchSubmissionScreen(
             }
             PortalResult.REJECTED -> {
                 awaitingResultForTicketId = null
+                if (!rejectedTicketIds.contains(ticketId)) rejectedTicketIds.add(ticketId)
                 lastAutomationStatus = "NOT ENTERED: the site rejected the entry. Ticket stays in the queue."
-                Toast.makeText(context, "The site didn't accept this entry. It's still in your queue.", Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    context,
+                    "The site didn't accept this entry. Failed tries count toward a lockout, so check the code before trying again.",
+                    Toast.LENGTH_LONG
+                ).show()
+                true
+            }
+            PortalResult.LOCKED -> {
+                awaitingResultForTicketId = null
+                if (!rejectedTicketIds.contains(ticketId)) rejectedTicketIds.add(ticketId)
+                recordLockout(SubmissionAutomationHelper.DEFAULT_LOCKOUT_HOURS)
+                lastAutomationStatus = "LOCKED: too many failed tries. Entries blocked until ${lockedUntilText()}."
+                Toast.makeText(context, "The site has blocked entries until about ${lockedUntilText()}.", Toast.LENGTH_LONG).show()
                 true
             }
             PortalResult.UNKNOWN -> false
@@ -181,14 +225,18 @@ fun BatchSubmissionScreen(
     // Poll DOM for SPA / XHR submission results that don't trigger a full page reload
     LaunchedEffect(awaitingResultForTicketId) {
         val targetId = awaitingResultForTicketId ?: return@LaunchedEffect
-        val maxAttempts = 30
+        val maxAttempts = 120
         for (attempt in 1..maxAttempts) {
             delay(1000L)
             if (awaitingResultForTicketId != targetId) return@LaunchedEffect
             val wv = webViewInstance ?: break
             val isLastAttempt = attempt == maxAttempts
             wv.evaluateJavascript(SubmissionAutomationHelper.generateCheckSuccessScript()) { result ->
-                val conclusive = handlePortalResult(targetId, SubmissionAutomationHelper.parsePortalResult(result))
+                val conclusive = handlePortalResult(
+                    targetId,
+                    SubmissionAutomationHelper.parsePortalResult(result),
+                    SubmissionAutomationHelper.submitSeen(result)
+                )
                 if (!conclusive && isLastAttempt && awaitingResultForTicketId == targetId) {
                     awaitingResultForTicketId = null
                     lastAutomationStatus = "UNCONFIRMED: no confirmation from the site. Ticket stays in the queue."
@@ -221,19 +269,33 @@ fun BatchSubmissionScreen(
 
     // Picks the ticket's game in the portal's "Select game" list, fills the entry code and submits.
     // If the current page has no entry form, opens "Enter Your Tickets" first and waits for it.
-    fun startAutoFill(ticket: LotteryTicket) {
+    fun startAutoFill(ticket: LotteryTicket, retryConfirmed: Boolean = false) {
         val wv = webViewInstance ?: return
+        if (isLockedOut()) {
+            lastAutomationStatus = "LOCKED: entries blocked until ${lockedUntilText()}."
+            Toast.makeText(context, "The site has blocked entries until about ${lockedUntilText()}. Nothing was sent.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (!retryConfirmed && rejectedTicketIds.contains(ticket.id)) {
+            confirmRetryFor = ticket
+            return
+        }
         autoFillJob?.cancel()
         awaitingResultForTicketId = null
         autoFillJob = scope.launch {
             val js = SubmissionAutomationHelper.generateCodeSubmissionScript(
                 ticket.entryCode,
                 ticket.gameNumber,
-                IllinoisLotteryGames.findGameByNumber(ticket.gameNumber)?.title ?: ticket.gameName
+                IllinoisLotteryGames.findGameByNumber(ticket.gameNumber)?.title ?: ticket.gameName,
+                autoSubmit = AUTO_SUBMIT_ENTRIES
             )
             // Also put the code on the clipboard, so it can be pasted by hand if the page refuses it.
             (context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)
                 ?.setPrimaryClip(ClipData.newPlainText("Lottery Code", ticket.entryCode))
+            // Note what the page already says before anything is filled or sent.
+            staleResultOnPage = SubmissionAutomationHelper.parsePortalResult(
+                runJs(wv, SubmissionAutomationHelper.generateCheckSuccessScript())
+            ).takeIf { it != PortalResult.UNKNOWN }
             var status = runJs(wv, js)
             if (status.startsWith("NO_FORM")) {
                 if (!currentWebUrl.contains("/2ndchance/enter")) {
@@ -255,8 +317,21 @@ fun BatchSubmissionScreen(
                     lastAutomationStatus = "WAITING: submitted, waiting for the site to confirm…"
                     "Submitted. Waiting for the site to confirm…"
                 }
+                status.startsWith("FILLED") -> {
+                    // The user presses Submit Entry; keep watching for the site's answer.
+                    awaitingResultForTicketId = ticket.id
+                    lastAutomationStatus = "FILLED: check the game and code, then tap Submit Entry on the page."
+                    "Filled in. Check the code matches your ticket, then tap Submit Entry."
+                }
+                status.startsWith("LOCKED") -> {
+                    if (!rejectedTicketIds.contains(ticket.id)) rejectedTicketIds.add(ticket.id)
+                    recordLockout(SubmissionAutomationHelper.lockoutHours(status))
+                    lastAutomationStatus = "LOCKED: entries blocked until ${lockedUntilText()}."
+                    "The site has blocked entries until about ${lockedUntilText()}. Nothing was sent."
+                }
                 status.startsWith("NO_GAME") -> status.removePrefix("NO_GAME: ")
                 status.startsWith("NO_CODE_BOX") -> status.removePrefix("NO_CODE_BOX: ") + " (code copied)"
+                status.startsWith("NOT_FILLED") -> status.removePrefix("NOT_FILLED: ")
                 status.startsWith("NO_FORM") && currentWebUrl.contains("login", ignoreCase = true) ->
                     "Log in to the 2nd Chance Zone, then tap Auto-Fill again"
                 status.startsWith("NO_FORM") -> "Couldn't find the entry form. Open Enter Your Tickets and try again."
@@ -265,6 +340,29 @@ fun BatchSubmissionScreen(
             Toast.makeText(context, message, Toast.LENGTH_LONG).show()
         }
     }
+    confirmRetryFor?.let { ticket ->
+        AlertDialog(
+            onDismissRequest = { confirmRetryFor = null },
+            title = { Text("Try this code again?") },
+            text = {
+                Text(
+                    "The site already rejected ${ticket.formattedCode}. After 5 failed tries it blocks all " +
+                        "entries for 8 hours. Check the code against your ticket (0 vs O, 1 vs I, 8 vs B) " +
+                        "before trying again."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRetryFor = null
+                    startAutoFill(ticket, retryConfirmed = true)
+                }) { Text("Try again") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRetryFor = null }) { Text("Cancel") }
+            }
+        )
+    }
+
     // "Confirm & Next" marks a ticket entered by hand, so it asks first.
     var confirmManualEntryFor by remember { mutableStateOf<LotteryTicket?>(null) }
     confirmManualEntryFor?.let { ticket ->
@@ -537,7 +635,7 @@ fun BatchSubmissionScreen(
                                     Text(
                                         text = lastAutomationStatus ?: "",
                                         style = MaterialTheme.typography.labelSmall,
-                                        color = if (lastAutomationStatus?.let { it.startsWith("ENTERED") || it.startsWith("WAITING") } == true) LotteryEmerald else LuckyGold,
+                                        color = if (lastAutomationStatus?.let { it.startsWith("ENTERED") || it.startsWith("WAITING") || it.startsWith("FILLED") } == true) LotteryEmerald else LuckyGold,
                                         fontFamily = FontFamily.Monospace,
                                         maxLines = 1
                                     )
@@ -738,6 +836,7 @@ fun BatchSubmissionScreen(
                                     return
                                 }
                                 isPageLoading = true
+                                staleResultOnPage = null
                                 url?.let { currentWebUrl = it }
                             }
 
@@ -751,7 +850,11 @@ fun BatchSubmissionScreen(
                                 val ticketId = awaitingResultForTicketId ?: return
                                 // Inconclusive results keep watching; the poll above gives up after ~30 s.
                                 evaluateJavascript(SubmissionAutomationHelper.generateCheckSuccessScript()) { result ->
-                                    latestHandlePortalResult(ticketId, SubmissionAutomationHelper.parsePortalResult(result))
+                                    latestHandlePortalResult(
+                                        ticketId,
+                                        SubmissionAutomationHelper.parsePortalResult(result),
+                                        SubmissionAutomationHelper.submitSeen(result)
+                                    )
                                 }
                             }
                         }

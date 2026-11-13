@@ -8,6 +8,8 @@ enum class PortalResult {
     DUPLICATE,
     /** The site showed an error (empty field, invalid code, wrong game...); nothing was entered. */
     REJECTED,
+    /** Too many failed tries: the site blocks entries for several hours. Never submit while locked. */
+    LOCKED,
     /** Nothing conclusive on the page yet. */
     UNKNOWN
 }
@@ -31,12 +33,19 @@ object SubmissionAutomationHelper {
      * (a JSON string such as `"SUBMITTED"`, or `null`) to a [PortalResult].
      */
     fun parsePortalResult(rawJsResult: String?): PortalResult =
-        when (unquoteJsString(rawJsResult)) {
+        when (unquoteJsString(rawJsResult).substringBefore('|')) {
             "SUBMITTED" -> PortalResult.SUBMITTED
             "DUPLICATE" -> PortalResult.DUPLICATE
             "REJECTED" -> PortalResult.REJECTED
+            "LOCKED" -> PortalResult.LOCKED
             else -> PortalResult.UNKNOWN
         }
+
+    /**
+     * True when the result check saw the user (or the app) press Submit on the page since the
+     * last Auto-Fill, so a message on the page can be trusted as the answer to that attempt.
+     */
+    fun submitSeen(rawJsResult: String?): Boolean = unquoteJsString(rawJsResult).endsWith("|S")
 
     fun generateLoginScript(email: String, pass: String): String {
         val safeEmail = escapeJsString(email)
@@ -98,14 +107,37 @@ object SubmissionAutomationHelper {
      *  - `NO_CODE_BOX: ...` the game was picked but the Entry Code box wasn't found; nothing is submitted
      *  - `ERROR: ...`
      */
-    fun generateCodeSubmissionScript(entryCode: String, gameNumber: String, gameTitle: String = ""): String {
+    /** Text the site shows after too many failed entry attempts (lowercase, matched in page text). */
+    const val LOCKOUT_PHRASE = "exceeded the maximum number of unsuccessful"
+    const val DEFAULT_LOCKOUT_HOURS = 8
+
+    /**
+     * Hours the site says to wait, read from "...You may try again in 8 hours.", or [default].
+     */
+    fun lockoutHours(pageText: String, default: Int = DEFAULT_LOCKOUT_HOURS): Int =
+        Regex("""(?i)try again in\s+(\d{1,2})\s+hour""").find(pageText)?.groupValues?.get(1)?.toIntOrNull() ?: default
+
+    /**
+     * [autoSubmit] false fills the game and code and leaves pressing Submit Entry to the user.
+     */
+    fun generateCodeSubmissionScript(
+        entryCode: String,
+        gameNumber: String,
+        gameTitle: String = "",
+        autoSubmit: Boolean = false
+    ): String {
         val safeCode = escapeJsString(entryCode)
         val safeGame = escapeJsString(gameNumber)
         val safeTitle = escapeJsString(gameTitle)
         return """
             (function() {
                 try {
-                    var CODE = '$safeCode', GAME = '$safeGame', TITLE = '$safeTitle';
+                    var CODE = '$safeCode', GAME = '$safeGame', TITLE = '$safeTitle', AUTO_SUBMIT = $autoSubmit;
+                    // Locked out after too many failed tries: touch nothing.
+                    var pageText = document.body ? (document.body.innerText || '').toLowerCase() : '';
+                    if (pageText.indexOf('$LOCKOUT_PHRASE') >= 0) {
+                        return "LOCKED: " + ((pageText.match(/try again in\s+\d+\s+hours?/) || ['try again later'])[0]);
+                    }
                     function norm(s) { return (s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
                     function visible(el) {
                         return !!el && !el.disabled && el.type !== 'hidden' &&
@@ -251,13 +283,35 @@ object SubmissionAutomationHelper {
                             .filter(function(el) { return /submit\s*entry|^\s*submit\s*${'$'}/i.test(el.innerText || el.value || ''); })[0] || null;
                     }
 
+                    // Note when Submit is pressed after this fill, so the result check can tell a
+                    // fresh answer from a message that was already on the page.
+                    window.__scSubmittedAt = 0;
+                    if (!window.__scHooked) {
+                        window.__scHooked = true;
+                        var markSubmit = function() { window.__scSubmittedAt = Date.now(); };
+                        document.addEventListener('submit', markSubmit, true);
+                        document.addEventListener('click', function(e) {
+                            var el = e.target && e.target.closest ? e.target.closest('button, input[type="submit"], input[type="button"], a') : null;
+                            if (el && /submit/i.test(el.innerText || el.value || '')) markSubmit();
+                        }, true);
+                    }
                     var codeFilled = fillCode();
                     var picked = gameOption ? ('Selected ' + gameOption.text.trim() + '. ') : '';
-                    if (!findSubmit()) {
-                        setTimeout(fillCode, 400);
-                        return codeFilled || findCodeBox()
-                            ? ("SUCCESS: " + picked + "Code filled. Press Submit Entry.")
-                            : ("NO_FORM: " + picked + "Entry code box not found");
+                    if (!AUTO_SUBMIT || !findSubmit()) {
+                        // Keep the code in the box for ~3 s while the form settles after the game
+                        // change (it may be rebuilt), without ever pressing Submit.
+                        var refills = 0;
+                        (function keepFilled() {
+                            refills++;
+                            fillCode();
+                            if (refills < 10) setTimeout(keepFilled, 300);
+                        })();
+                        if (codeFilled) {
+                            return "FILLED: " + picked + "Code filled. Check it, then press Submit Entry.";
+                        }
+                        return findCodeBox()
+                            ? ("NOT_FILLED: " + picked + "The code didn't stay in the box. Paste it (it's copied) and check it before Submit Entry.")
+                            : ("NO_CODE_BOX: " + picked + "Couldn't find the Entry Code box. Paste the code and press Submit Entry.");
                     }
                     if (!findCodeBox()) {
                         return "NO_CODE_BOX: " + picked + "Couldn't find the Entry Code box. Paste the code and press Submit Entry.";
@@ -311,10 +365,13 @@ object SubmissionAutomationHelper {
                                 bodyText.includes("entry has been accepted") ||
                                 bodyText.includes("thank you for your entry");
 
-                if (isDuplicate) return "DUPLICATE";
+                // "|S": Submit was pressed since the last Auto-Fill (and the page had a moment to answer).
+                var seen = (window.__scSubmittedAt && Date.now() - window.__scSubmittedAt > 1500) ? "|S" : "";
+                if (bodyText.includes("$LOCKOUT_PHRASE")) return "LOCKED" + seen;
+                if (isDuplicate) return "DUPLICATE" + seen;
                 // An error on the page always wins over a success phrase elsewhere on it.
-                if (isRejected) return "REJECTED";
-                if (isSuccess) return "SUBMITTED";
+                if (isRejected) return "REJECTED" + seen;
+                if (isSuccess) return "SUBMITTED" + seen;
                 return "PENDING";
             })();
         """.trimIndent()
