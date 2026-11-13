@@ -379,7 +379,7 @@ object SubmissionAutomationHelper {
                 var alertIsError = !!alertBox && /alert-danger|alert-warning/.test(alertBox.className || '');
                 if (alertText) {
                     if (alertText.indexOf('has been accepted') >= 0) isSuccess = true;
-                    else if (alertText.indexOf('already') >= 0) isDuplicate = true;
+                    else if (/already been (entered|submitted|used|registered)|duplicate/.test(alertText)) isDuplicate = true;
                     else if (alertIsError) isRejected = true;
                 }
                 // "|S": Submit was pressed since the last Auto-Fill (and the page had a moment to answer).
