@@ -8,6 +8,8 @@ enum class PortalResult {
     DUPLICATE,
     /** The site showed an error (empty field, invalid code, wrong game...); nothing was entered. */
     REJECTED,
+    /** Too many failed tries: the site blocks entries for several hours. Never submit while locked. */
+    LOCKED,
     /** Nothing conclusive on the page yet. */
     UNKNOWN
 }
@@ -35,6 +37,7 @@ object SubmissionAutomationHelper {
             "SUBMITTED" -> PortalResult.SUBMITTED
             "DUPLICATE" -> PortalResult.DUPLICATE
             "REJECTED" -> PortalResult.REJECTED
+            "LOCKED" -> PortalResult.LOCKED
             else -> PortalResult.UNKNOWN
         }
 
@@ -98,14 +101,37 @@ object SubmissionAutomationHelper {
      *  - `NO_CODE_BOX: ...` the game was picked but the Entry Code box wasn't found; nothing is submitted
      *  - `ERROR: ...`
      */
-    fun generateCodeSubmissionScript(entryCode: String, gameNumber: String, gameTitle: String = ""): String {
+    /** Text the site shows after too many failed entry attempts (lowercase, matched in page text). */
+    const val LOCKOUT_PHRASE = "exceeded the maximum number of unsuccessful"
+    const val DEFAULT_LOCKOUT_HOURS = 8
+
+    /**
+     * Hours the site says to wait, read from "...You may try again in 8 hours.", or [default].
+     */
+    fun lockoutHours(pageText: String, default: Int = DEFAULT_LOCKOUT_HOURS): Int =
+        Regex("""(?i)try again in\s+(\d{1,2})\s+hour""").find(pageText)?.groupValues?.get(1)?.toIntOrNull() ?: default
+
+    /**
+     * [autoSubmit] false fills the game and code and leaves pressing Submit Entry to the user.
+     */
+    fun generateCodeSubmissionScript(
+        entryCode: String,
+        gameNumber: String,
+        gameTitle: String = "",
+        autoSubmit: Boolean = false
+    ): String {
         val safeCode = escapeJsString(entryCode)
         val safeGame = escapeJsString(gameNumber)
         val safeTitle = escapeJsString(gameTitle)
         return """
             (function() {
                 try {
-                    var CODE = '$safeCode', GAME = '$safeGame', TITLE = '$safeTitle';
+                    var CODE = '$safeCode', GAME = '$safeGame', TITLE = '$safeTitle', AUTO_SUBMIT = $autoSubmit;
+                    // Locked out after too many failed tries: touch nothing.
+                    var pageText = document.body ? (document.body.innerText || '').toLowerCase() : '';
+                    if (pageText.indexOf('$LOCKOUT_PHRASE') >= 0) {
+                        return "LOCKED: " + ((pageText.match(/try again in\s+\d+\s+hours?/) || ['try again later'])[0]);
+                    }
                     function norm(s) { return (s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
                     function visible(el) {
                         return !!el && !el.disabled && el.type !== 'hidden' &&
@@ -253,10 +279,10 @@ object SubmissionAutomationHelper {
 
                     var codeFilled = fillCode();
                     var picked = gameOption ? ('Selected ' + gameOption.text.trim() + '. ') : '';
-                    if (!findSubmit()) {
+                    if (!AUTO_SUBMIT || !findSubmit()) {
                         setTimeout(fillCode, 400);
                         return codeFilled || findCodeBox()
-                            ? ("SUCCESS: " + picked + "Code filled. Press Submit Entry.")
+                            ? ("FILLED: " + picked + "Code filled. Check it, then press Submit Entry.")
                             : ("NO_FORM: " + picked + "Entry code box not found");
                     }
                     if (!findCodeBox()) {
@@ -311,6 +337,7 @@ object SubmissionAutomationHelper {
                                 bodyText.includes("entry has been accepted") ||
                                 bodyText.includes("thank you for your entry");
 
+                if (bodyText.includes("$LOCKOUT_PHRASE")) return "LOCKED";
                 if (isDuplicate) return "DUPLICATE";
                 // An error on the page always wins over a success phrase elsewhere on it.
                 if (isRejected) return "REJECTED";
