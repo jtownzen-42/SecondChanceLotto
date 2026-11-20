@@ -109,7 +109,8 @@ object SubmissionAutomationHelper {
     private val NEGATION_RE = Regex("""\b(not|unable|failed|error|invalid|cannot|can't)\b""")
     private val REJECT_PHRASES = listOf(
         "please completely fill out", "ticket not entered", "invalid entry code", "entry code is invalid",
-        "not a valid", "is not eligible", "could not be processed", "daily entry limit", "please try again"
+        "not a valid", "is not eligible", "could not be processed", "daily entry limit", "please try again",
+        "not been accepted", "not accepted"
     )
     private val ERROR_CLASS_RE = Regex("""alert-danger|alert-warning|alert-error|\berror\b|\binvalid\b""")
     private val SUCCESS_CLASS_RE = Regex("""alert-success|\bsuccess\b""")
@@ -125,10 +126,12 @@ object SubmissionAutomationHelper {
         val c = cssClass.lowercase()
         if (t.contains(LOCKOUT_PHRASE)) return PortalResult.LOCKED
         if (DUPLICATE_RE.containsMatchIn(t)) return PortalResult.DUPLICATE
-        if (SUCCESS_PHRASES.any { t.contains(it) } && !NEGATION_RE.containsMatchIn(t)) return PortalResult.SUBMITTED
+        val negated = NEGATION_RE.containsMatchIn(t)
+        if (SUCCESS_PHRASES.any { t.contains(it) } && !negated) return PortalResult.SUBMITTED
         if (trustClass && ERROR_CLASS_RE.containsMatchIn(c)) return PortalResult.REJECTED
         if (REJECT_PHRASES.any { t.contains(it) }) return PortalResult.REJECTED
-        if (trustClass && SUCCESS_CLASS_RE.containsMatchIn(c)) return PortalResult.SUBMITTED
+        // Green styling never outweighs words that say otherwise ("has not been accepted").
+        if (trustClass && !negated && SUCCESS_CLASS_RE.containsMatchIn(c)) return PortalResult.SUBMITTED
         return PortalResult.UNKNOWN
     }
 
@@ -219,6 +222,9 @@ object SubmissionAutomationHelper {
      */
     /** Text the site shows after too many failed entry attempts (lowercase, matched in page text). */
     const val LOCKOUT_PHRASE = "exceeded the maximum number of unsuccessful"
+
+    /** Elements that can carry a message other than `#entry-alert` (read only as a fallback). */
+    private const val ALERT_SELECTOR = "[role=\"alert\"], .alert, .error-message, .invalid-feedback, .toast"
     const val DEFAULT_LOCKOUT_HOURS = 8
 
     /**
@@ -402,6 +408,17 @@ object SubmissionAutomationHelper {
                     // Note when Submit is pressed after this fill, so the result check can tell a
                     // fresh answer from a message that was already on the page.
                     window.__scSubmittedAt = 0;
+                    // Messages already on the page before this attempt (rules, notices, an older
+                    // answer) are never read as its answer by the fallback in the result check.
+                    window.__scAlertBaseline = (function() {
+                        var seenText = {};
+                        var nodes = document.querySelectorAll('$ALERT_SELECTOR');
+                        for (var b = 0; b < nodes.length; b++) {
+                            var bt = (nodes[b].innerText || nodes[b].textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+                            if (bt) seenText[bt] = 1;
+                        }
+                        return seenText;
+                    })();
                     if (!window.__scHooked) {
                         window.__scHooked = true;
                         var markSubmit = function() { window.__scSubmittedAt = Date.now(); };
@@ -480,14 +497,17 @@ object SubmissionAutomationHelper {
                 // The live site answers every entry in #entry-alert.
                 var a = document.getElementById('entry-alert');
                 var aText = vis(a) ? clean(a.innerText || a.textContent) : '';
+                // Fallback only: alerts that appeared after Auto-Fill. With no baseline (no fill
+                // this page) nothing is read, so page copy can never pass for an answer.
                 var others = [];
-                var nodes = document.querySelectorAll('[role="alert"], .alert, .error-message, .invalid-feedback, .toast');
+                var base = window.__scAlertBaseline;
+                var nodes = base ? document.querySelectorAll('$ALERT_SELECTOR') : [];
                 for (var i = 0; i < nodes.length && others.length < 6; i++) {
                     var n = nodes[i];
                     if (a && (n === a || a.contains(n) || n.contains(a))) continue;
                     if (!vis(n)) continue;
                     var t = clean(n.innerText || n.textContent);
-                    if (t) others.push(enc(cls(n)) + ':' + enc(t));
+                    if (t && !base[t]) others.push(enc(cls(n)) + ':' + enc(t));
                 }
                 return ['SC1', lock, seen, aText ? '1' : '0', enc(a ? cls(a) : ''), enc(aText), others.join(',')].join('|');
             })();
