@@ -108,6 +108,32 @@ class PortalResultClassificationTest {
     }
 
     @Test
+    fun `green styling never outweighs negated words`() {
+        // Seen mid-update: the class is still green, the words already say no.
+        assertEquals(
+            PortalResult.REJECTED,
+            SubmissionAutomationHelper.parsePortalResult(
+                raw(alertClass = "alert alert-success", alertText = "Your entry has not been accepted.")
+            )
+        )
+        assertNotEquals(
+            PortalResult.SUBMITTED,
+            SubmissionAutomationHelper.classifyAnswer("Unable to process. Try later.", "alert alert-success", trustClass = true)
+        )
+    }
+
+    @Test
+    fun `fallback only reads alerts that appeared after Auto-Fill`() {
+        // The page script drops alerts already showing at fill time (rules, notices) and reads
+        // none at all without a fill, so instructions can't pass for an answer.
+        val fill = SubmissionAutomationHelper.generateCodeSubmissionScript("C1234567890", "7664")
+        val check = SubmissionAutomationHelper.generateCheckSuccessScript()
+        assertTrue(fill.contains("__scAlertBaseline"))
+        assertTrue(check.contains("__scAlertBaseline"))
+        assertTrue(check.contains("!base[t]"))
+    }
+
+    @Test
     fun `lockout wins over everything`() {
         assertEquals(
             PortalResult.LOCKED,
