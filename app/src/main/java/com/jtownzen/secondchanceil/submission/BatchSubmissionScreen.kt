@@ -177,7 +177,12 @@ fun BatchSubmissionScreen(
 
     // A ticket is only marked entered when the site itself says the entry went in.
     // Returns true when the result was conclusive (the ticket is no longer being watched).
-    fun handlePortalResult(ticketId: Long, result: PortalResult, submitSeen: Boolean = false): Boolean {
+    fun handlePortalResult(
+        ticketId: Long,
+        result: PortalResult,
+        submitSeen: Boolean = false,
+        siteMessage: String = ""
+    ): Boolean {
         if (awaitingResultForTicketId != ticketId) return true
         // A message that was already on the page before this attempt (e.g. an old error banner)
         // says nothing about it, unless Submit has been pressed since (then it's the answer).
@@ -204,7 +209,11 @@ fun BatchSubmissionScreen(
             PortalResult.REJECTED -> {
                 awaitingResultForTicketId = null
                 if (!rejectedTicketIds.contains(ticketId)) rejectedTicketIds.add(ticketId)
-                lastAutomationStatus = "NOT ENTERED: the site rejected the entry. Ticket stays in the queue."
+                lastAutomationStatus = if (siteMessage.isNotBlank()) {
+                    "NOT ENTERED: the site said \"$siteMessage\" Ticket stays in the queue."
+                } else {
+                    "NOT ENTERED: the site rejected the entry. Ticket stays in the queue."
+                }
                 Toast.makeText(
                     context,
                     "The site didn't accept this entry. Failed tries count toward a lockout, so check the code before trying again.",
@@ -239,7 +248,8 @@ fun BatchSubmissionScreen(
                 val conclusive = handlePortalResult(
                     targetId,
                     SubmissionAutomationHelper.parsePortalResult(result),
-                    SubmissionAutomationHelper.submitSeen(result)
+                    SubmissionAutomationHelper.submitSeen(result),
+                    SubmissionAutomationHelper.portalMessage(result)
                 )
                 if (!conclusive && isLastAttempt && awaitingResultForTicketId == targetId) {
                     awaitingResultForTicketId = null
@@ -919,7 +929,8 @@ fun BatchSubmissionScreen(
                                     latestHandlePortalResult(
                                         ticketId,
                                         SubmissionAutomationHelper.parsePortalResult(result),
-                                        SubmissionAutomationHelper.submitSeen(result)
+                                        SubmissionAutomationHelper.submitSeen(result),
+                                        SubmissionAutomationHelper.portalMessage(result)
                                     )
                                 }
                             }

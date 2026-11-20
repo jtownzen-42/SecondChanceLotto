@@ -150,7 +150,11 @@ class GameSelectionTest {
         assertEquals(IllinoisLotteryGames.SECOND_CHANCE_ENTER_URL, IllinoisLotteryGames.enterUrlFor(""))
         val check = SubmissionAutomationHelper.generateCheckSuccessScript()
         assertTrue(check.contains("entry-alert"))
-        assertTrue(check.contains("ticket not entered"))
+        // The live failure text is recognised by the classifier, not by a whole-page search.
+        assertEquals(
+            com.jtownzen.secondchanceil.submission.PortalResult.REJECTED,
+            SubmissionAutomationHelper.classifyAnswer("Ticket not entered, please try again.", "", trustClass = false)
+        )
         assertTrue(SubmissionAutomationHelper.generateCodeSubmissionScript("C1234567890", "7664").contains("ticket1_1_1"))
     }
 
