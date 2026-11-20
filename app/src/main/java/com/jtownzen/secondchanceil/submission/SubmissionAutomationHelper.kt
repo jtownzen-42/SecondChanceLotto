@@ -118,13 +118,14 @@ object SubmissionAutomationHelper {
         Regex("""(?i)try again in\s+(\d{1,2})\s+hour""").find(pageText)?.groupValues?.get(1)?.toIntOrNull() ?: default
 
     /**
-     * [autoSubmit] false fills the game and code and leaves pressing Submit Entry to the user.
+     * Fills the game and the entry code on the portal's form and stops there. Pressing
+     * Submit Entry is always the user's own action: there is deliberately no code path
+     * in this app that presses it.
      */
     fun generateCodeSubmissionScript(
         entryCode: String,
         gameNumber: String,
-        gameTitle: String = "",
-        autoSubmit: Boolean = false
+        gameTitle: String = ""
     ): String {
         val safeCode = escapeJsString(entryCode)
         val safeGame = escapeJsString(gameNumber)
@@ -132,7 +133,7 @@ object SubmissionAutomationHelper {
         return """
             (function() {
                 try {
-                    var CODE = '$safeCode', GAME = '$safeGame', TITLE = '$safeTitle', AUTO_SUBMIT = $autoSubmit;
+                    var CODE = '$safeCode', GAME = '$safeGame', TITLE = '$safeTitle';
                     // Locked out after too many failed tries: touch nothing.
                     var pageText = document.body ? (document.body.innerText || '').toLowerCase() : '';
                     if (pageText.indexOf('$LOCKOUT_PHRASE') >= 0) {
@@ -276,18 +277,6 @@ object SubmissionAutomationHelper {
                         setValue(gameSelect, gameOption.value);
                     }
 
-                    function findSubmit() {
-                        var box = findCodeBox();
-                        var root = (box && box.form) || (gameSelect && gameSelect.form) || document;
-                        var btn = root.querySelector('button[type="submit"]') ||
-                                  root.querySelector('input[type="submit"]') ||
-                                  root.querySelector('.submit-ticket') ||
-                                  root.querySelector('#submit-ticket') ||
-                                  root.querySelector('button.submit');
-                        if (btn) return btn;
-                        return Array.prototype.slice.call(document.querySelectorAll('button, input[type="button"], a'))
-                            .filter(function(el) { return /submit\s*entry|^\s*submit\s*${'$'}/i.test(el.innerText || el.value || ''); })[0] || null;
-                    }
 
                     // Note when Submit is pressed after this fill, so the result check can tell a
                     // fresh answer from a message that was already on the page.
@@ -303,45 +292,20 @@ object SubmissionAutomationHelper {
                     }
                     var codeFilled = fillCode();
                     var picked = gameOption ? ('Selected ' + gameOption.text.trim() + '. ') : '';
-                    if (!AUTO_SUBMIT || !findSubmit()) {
-                        // Keep the code in the box for ~3 s while the form settles after the game
-                        // change (it may be rebuilt), without ever pressing Submit.
-                        var refills = 0;
-                        (function keepFilled() {
-                            refills++;
-                            fillCode();
-                            if (refills < 10) setTimeout(keepFilled, 300);
-                        })();
-                        if (codeFilled) {
-                            return "FILLED: " + picked + "Code filled. Check it, then press Submit Entry.";
-                        }
-                        return findCodeBox()
-                            ? ("NOT_FILLED: " + picked + "The code didn't stay in the box. Paste it (it's copied) and check it before Submit Entry.")
-                            : ("NO_CODE_BOX: " + picked + "Couldn't find the Entry Code box. Paste the code and press Submit Entry.");
-                    }
-                    if (!findCodeBox()) {
-                        return "NO_CODE_BOX: " + picked + "Couldn't find the Entry Code box. Paste the code and press Submit Entry.";
-                    }
-                    // The page may rebuild the form after the game changes: refill until the
-                    // code sticks, and only then press Submit, so a blank form is never sent.
-                    var tries = 0;
-                    (function submitWhenFilled() {
-                        tries++;
-                        if (fillCode()) {
-                            // Check once more after the page settles; if the box was rebuilt in
-                            // the meantime, go round again instead of giving up.
-                            setTimeout(function() {
-                                if (fillCode()) {
-                                    var b = findSubmit(); if (b) b.click();
-                                } else if (tries < 8) {
-                                    submitWhenFilled();
-                                }
-                            }, 300);
-                        } else if (tries < 8) {
-                            setTimeout(submitWhenFilled, 300);
-                        }
+                    // Keep the code in the box for ~3 s while the form settles after the game
+                    // change (it may be rebuilt). Submit Entry is never pressed from here.
+                    var refills = 0;
+                    (function keepFilled() {
+                        refills++;
+                        fillCode();
+                        if (refills < 10) setTimeout(keepFilled, 300);
                     })();
-                    return "SUCCESS: " + picked + "Code filled and submit triggered";
+                    if (codeFilled) {
+                        return "FILLED: " + picked + "Code filled. Check it, then press Submit Entry.";
+                    }
+                    return findCodeBox()
+                        ? ("NOT_FILLED: " + picked + "The code didn't stay in the box. Paste it (it's copied) and check it before Submit Entry.")
+                        : ("NO_CODE_BOX: " + picked + "Couldn't find the Entry Code box. Paste the code and press Submit Entry.");
                 } catch(e) {
                     return "ERROR: " + e.message;
                 }

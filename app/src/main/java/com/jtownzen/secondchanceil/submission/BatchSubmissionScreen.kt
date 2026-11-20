@@ -100,12 +100,6 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 
 @SuppressLint("SetJavaScriptEnabled")
-/**
- * When false (the default), Auto-Fill picks the game and types the code, and the user presses
- * the site's Submit Entry. Every failed try counts toward the site's 5-try lockout.
- */
-const val AUTO_SUBMIT_ENTRIES = false
-
 @Composable
 fun BatchSubmissionScreen(
     pendingTickets: List<LotteryTicket>,
@@ -286,8 +280,7 @@ fun BatchSubmissionScreen(
             val js = SubmissionAutomationHelper.generateCodeSubmissionScript(
                 ticket.entryCode,
                 ticket.gameNumber,
-                IllinoisLotteryGames.findGameByNumber(ticket.gameNumber)?.title ?: ticket.gameName,
-                autoSubmit = AUTO_SUBMIT_ENTRIES
+                IllinoisLotteryGames.findGameByNumber(ticket.gameNumber)?.title ?: ticket.gameName
             )
             // Also put the code on the clipboard, so it can be pasted by hand if the page refuses it.
             (context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)
@@ -313,11 +306,6 @@ fun BatchSubmissionScreen(
             }
             lastAutomationStatus = status
             val message = when {
-                status.startsWith("SUCCESS") -> {
-                    awaitingResultForTicketId = ticket.id
-                    lastAutomationStatus = "WAITING: submitted, waiting for the site to confirm…"
-                    "Submitted. Waiting for the site to confirm…"
-                }
                 status.startsWith("FILLED") -> {
                     // The user presses Submit Entry; keep watching for the site's answer.
                     awaitingResultForTicketId = ticket.id

@@ -24,8 +24,9 @@ by hand — forty times in a row.
 - **File it** — every ticket goes into a Room database with its game, game number, scan date,
   promotion deadline and submission status.
 - **Enter it** — the Submit screen opens the official 2nd Chance entry page in an in-app WebView,
-  selects the right game, fills the entry code, and reads the portal's own answer back
-  (accepted / duplicate / rejected / locked out) so the vault stays accurate.
+  selects the right game and fills the entry code. **You** press Submit Entry, one ticket at a
+  time; the app then reads the portal's own answer back (accepted / duplicate / rejected /
+  locked out) so the vault stays accurate.
 - **Track it** — the Vault lists everything scanned with filters for pending, submitted and
   failed, plus retry and edit on anything the portal turned down.
 
@@ -34,9 +35,11 @@ by hand — forty times in a row.
 This is a personal utility, not a Lottery product.
 
 - Not affiliated with, endorsed by, or connected to the Illinois Lottery or its operators.
-- The app fills the official entry form; it does not bypass authentication, rate limits or any
-  portal control. The portal's attempt lockout is detected and respected — the app stops rather
-  than retrying through it.
+- The app fills the official entry form and stops. Pressing Submit Entry is always the user's
+  own action — there is no code path in the app that presses it, and a unit test enforces that.
+- It does not bypass authentication, rate limits or any portal control. The portal's attempt
+  lockout is detected and respected: the app refuses to send while a lockout is on rather than
+  retrying through it, and asks before re-trying a code the site has already rejected.
 - Illinois Lottery rules require you to keep the physical ticket. The app stores a photo for
   reference only; it is not a substitute for the ticket itself.
 
@@ -46,7 +49,7 @@ This is a personal utility, not a Lottery product.
 |---|---|
 | **Dashboard** | Counts of scanned / pending / submitted, and countdowns to each promotion's final entry date |
 | **Scan** | Camera viewfinder, OCR, and a review sheet for correcting the code and game before saving |
-| **Submit** | In-app WebView on the official portal, with auto-fill of game and entry code and result read-back |
+| **Submit** | In-app WebView on the official portal: auto-fill of game and entry code, you press Submit, result read back |
 | **Vault** | Searchable ticket ledger with status filters, edit, retry and delete |
 
 ## Architecture

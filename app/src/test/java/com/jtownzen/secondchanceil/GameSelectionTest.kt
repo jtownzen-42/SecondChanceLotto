@@ -4,6 +4,7 @@ import com.jtownzen.secondchanceil.data.IllinoisLotteryGames
 import com.jtownzen.secondchanceil.scanner.LotteryCodeParser
 import com.jtownzen.secondchanceil.submission.SubmissionAutomationHelper
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -121,12 +122,12 @@ class GameSelectionTest {
     }
 
     @Test
-    fun autoSubmit_isOffUnlessAsked() {
-        assertTrue(SubmissionAutomationHelper.generateCodeSubmissionScript("C1234567890", "7664").contains("AUTO_SUBMIT = false"))
-        assertTrue(
-            SubmissionAutomationHelper.generateCodeSubmissionScript("C1234567890", "7664", autoSubmit = true)
-                .contains("AUTO_SUBMIT = true")
-        )
+    fun fillScript_neverPressesSubmit() {
+        val js = SubmissionAutomationHelper.generateCodeSubmissionScript("C1234567890", "7664")
+        // Submit Entry is the user's action. Nothing in the fill script may click it.
+        assertFalse(js.contains(".click()"))
+        assertFalse(js.contains("AUTO_SUBMIT"))
+        assertTrue(js.contains("press Submit Entry"))
     }
 
     @Test
