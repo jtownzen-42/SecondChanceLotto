@@ -48,13 +48,14 @@ import com.example.ui.theme.StatusError
 @Composable
 fun AccountSettingsDialog(
     userPreferences: UserPreferences,
-    onSaveCredentials: (email: String, pass: String) -> Unit,
+    onSaveCredentials: (email: String, pass: String) -> Boolean,
     onClearCredentials: () -> Unit,
     onDismiss: () -> Unit
 ) {
     var email by remember { mutableStateOf(userPreferences.accountEmail) }
     var password by remember { mutableStateOf(userPreferences.accountPassword) }
     var passwordVisible by remember { mutableStateOf(false) }
+    var saveError by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -86,7 +87,10 @@ fun AccountSettingsDialog(
 
                 OutlinedTextField(
                     value = email,
-                    onValueChange = { email = it },
+                    onValueChange = {
+                        email = it
+                        saveError = null
+                    },
                     label = { Text("Account Email") },
                     placeholder = { Text("your.email@example.com") },
                     singleLine = true,
@@ -97,7 +101,10 @@ fun AccountSettingsDialog(
 
                 OutlinedTextField(
                     value = password,
-                    onValueChange = { password = it },
+                    onValueChange = {
+                        password = it
+                        saveError = null
+                    },
                     label = { Text("Account Password") },
                     singleLine = true,
                     visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
@@ -111,6 +118,15 @@ fun AccountSettingsDialog(
                     },
                     modifier = Modifier.fillMaxWidth().testTag("settings_password_input")
                 )
+
+                if (saveError != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = saveError!!,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = StatusError
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(14.dp))
 
@@ -128,7 +144,7 @@ fun AccountSettingsDialog(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Stored privately on your device. Used strictly by the in-app submission browser.",
+                            text = "Encrypted on your device with Android Keystore. Used strictly on the official 2nd Chance site.",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -139,8 +155,11 @@ fun AccountSettingsDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    onSaveCredentials(email, password)
-                    onDismiss()
+                    if (onSaveCredentials(email, password)) {
+                        onDismiss()
+                    } else {
+                        saveError = "Device secure storage (Keystore) failed to lock this password, so nothing was saved."
+                    }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = LotteryEmerald),
                 modifier = Modifier.testTag("save_settings_button")

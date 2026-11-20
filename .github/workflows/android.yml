@@ -32,8 +32,22 @@ jobs:
       - name: Build debug APK
         run: gradle assembleDebug --stacktrace
 
+      - name: Android Lint
+        run: gradle lintDebug --stacktrace
+
       - name: Unit tests
         run: gradle testDebugUnitTest
+
+      - name: Verify minified release build (R8)
+        env:
+          KEYSTORE_PATH: ${{ runner.temp }}/ci-release.jks
+          STORE_PASSWORD: ci-release-password
+          KEY_PASSWORD: ci-release-password
+        run: |
+          keytool -genkeypair -v -keystore "$KEYSTORE_PATH" -storepass "$STORE_PASSWORD" \
+            -alias upload -keypass "$KEY_PASSWORD" -keyalg RSA -keysize 2048 \
+            -validity 100 -dname "CN=CI Verify,O=CI,C=US"
+          gradle assembleRelease --stacktrace
 
       - name: Upload test reports
         if: always()
@@ -41,6 +55,14 @@ jobs:
         with:
           name: test-reports
           path: app/build/reports/tests/
+          if-no-files-found: ignore
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-debug.*
           if-no-files-found: ignore
 
       - name: Upload debug APK

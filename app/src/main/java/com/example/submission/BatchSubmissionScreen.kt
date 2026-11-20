@@ -5,12 +5,15 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
+import android.net.Uri
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
+import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Toast
@@ -113,7 +116,8 @@ fun BatchSubmissionScreen(
     onTicketSubmitted: (ticketId: Long, confirmation: String?) -> Unit,
     onTicketDuplicate: (ticketId: Long) -> Unit,
     onConfigureCredentials: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    sessionResetCount: Int = 0
 ) {
     val context = LocalContext.current
 
@@ -250,9 +254,25 @@ fun BatchSubmissionScreen(
         }
     }
 
+    LaunchedEffect(sessionResetCount) {
+        if (sessionResetCount > 0) {
+            awaitingResultForTicketId = null
+            webViewInstance?.apply {
+                clearCache(true)
+                clearHistory()
+                loadUrl(IllinoisLotteryGames.SECOND_CHANCE_ZONE_URL)
+            }
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
-            webViewInstance?.stopLoading()
+            webViewInstance?.apply {
+                stopLoading()
+                removeAllViews()
+                destroy()
+            }
+            webViewInstance = null
         }
     }
 
@@ -292,13 +312,17 @@ fun BatchSubmissionScreen(
             // Also put the code on the clipboard, so it can be pasted by hand if the page refuses it.
             (context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)
                 ?.setPrimaryClip(ClipData.newPlainText("Lottery Code", ticket.entryCode))
-            // Note what the page already says before anything is filled or sent.
-            staleResultOnPage = SubmissionAutomationHelper.parsePortalResult(
-                runJs(wv, SubmissionAutomationHelper.generateCheckSuccessScript())
-            ).takeIf { it != PortalResult.UNKNOWN }
-            var status = runJs(wv, js)
+            var status = if (IllinoisLotteryGames.isAllowedPortalUrl(wv.url)) {
+                // Note what the page already says before anything is filled or sent.
+                staleResultOnPage = SubmissionAutomationHelper.parsePortalResult(
+                    runJs(wv, SubmissionAutomationHelper.generateCheckSuccessScript())
+                ).takeIf { it != PortalResult.UNKNOWN }
+                runJs(wv, js)
+            } else {
+                "NO_FORM"
+            }
             if (status.startsWith("NO_FORM")) {
-                if (!currentWebUrl.contains("/2ndchance/enter")) {
+                if (!IllinoisLotteryGames.isAllowedPortalUrl(wv.url) || !currentWebUrl.contains("/2ndchance/enter")) {
                     Toast.makeText(context, "Opening Enter Your Tickets…", Toast.LENGTH_SHORT).show()
                     // The site preselects the game from ?game_id=.
                     wv.loadUrl(IllinoisLotteryGames.enterUrlFor(ticket.gameNumber))
@@ -307,9 +331,15 @@ fun BatchSubmissionScreen(
                 for (attempt in 1..20) {
                     delay(750L)
                     if (isPageLoading) continue
+                    if (!IllinoisLotteryGames.isAllowedPortalUrl(wv.url)) continue
                     status = runJs(wv, js)
                     if (!status.startsWith("NO_FORM")) break
                 }
+            }
+            if (!IllinoisLotteryGames.isAllowedPortalUrl(wv.url) && status.startsWith("NO_FORM")) {
+                lastAutomationStatus = "BLOCKED: auto-fill only runs on the official Illinois 2nd Chance site"
+                Toast.makeText(context, "Open the official Illinois 2nd Chance site before auto-filling.", Toast.LENGTH_LONG).show()
+                return@launch
             }
             lastAutomationStatus = status
             val message = when {
@@ -581,19 +611,29 @@ fun BatchSubmissionScreen(
                                             if (userPreferences.accountEmail.isBlank()) {
                                                 onConfigureCredentials()
                                             } else {
-                                                val js = SubmissionAutomationHelper.generateLoginScript(
-                                                    userPreferences.accountEmail,
-                                                    userPreferences.accountPassword
-                                                )
-                                                webViewInstance?.evaluateJavascript(js) { result ->
-                                                    val status = SubmissionAutomationHelper.unquoteJsString(result)
-                                                    lastAutomationStatus = status
-                                                    val message = if (status.startsWith("SUCCESS")) {
-                                                        "Attempting login with saved credentials"
-                                                    } else {
-                                                        status.ifEmpty { "Login fields not detected on current page" }
+                                                val wv = webViewInstance
+                                                if (wv == null || !IllinoisLotteryGames.isAllowedPortalUrl(wv.url)) {
+                                                    lastAutomationStatus = "BLOCKED: auto-login only runs on the official Illinois 2nd Chance site"
+                                                    Toast.makeText(
+                                                        context,
+                                                        "Open the official Illinois 2nd Chance Login page before auto-filling credentials.",
+                                                        Toast.LENGTH_LONG
+                                                    ).show()
+                                                } else {
+                                                    val js = SubmissionAutomationHelper.generateLoginScript(
+                                                        userPreferences.accountEmail,
+                                                        userPreferences.accountPassword
+                                                    )
+                                                    wv.evaluateJavascript(js) { result ->
+                                                        val status = SubmissionAutomationHelper.unquoteJsString(result)
+                                                        lastAutomationStatus = status
+                                                        val message = if (status.startsWith("SUCCESS")) {
+                                                            "Attempting login with saved credentials"
+                                                        } else {
+                                                            status.ifEmpty { "Login fields not detected on current page" }
+                                                        }
+                                                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                                                     }
-                                                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                                                 }
                                             }
                                         },
@@ -801,6 +841,9 @@ fun BatchSubmissionScreen(
                         settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true
+                            allowFileAccess = false
+                            allowContentAccess = false
+                            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                             useWideViewPort = true
                             loadWithOverviewMode = true
                             cacheMode = WebSettings.LOAD_DEFAULT
@@ -818,15 +861,33 @@ fun BatchSubmissionScreen(
                         }
 
                         webViewClient = object : WebViewClient() {
-                            // The portal sometimes redirects to plain http://, which Android blocks
-                            // (ERR_CLEARTEXT_NOT_PERMITTED). Send those to the https:// address instead.
+                            // Keep only the official Illinois 2nd Chance HTTPS site inside the
+                            // credentialed WebView; external links open in the device browser.
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                                val secure = IllinoisLotteryGames.upgradeToHttps(request?.url?.toString())
-                                if (secure != null && request?.isForMainFrame == true) {
+                                val targetUrl = request?.url?.toString()
+                                val isMainFrame = request?.isForMainFrame ?: true
+                                if (!isMainFrame) {
+                                    val scheme = request?.url?.scheme?.lowercase()
+                                    return scheme != "https" && targetUrl != "about:blank"
+                                }
+                                val secure = IllinoisLotteryGames.upgradeToHttps(targetUrl)
+                                if (secure != null) {
                                     view?.loadUrl(secure)
                                     return true
                                 }
-                                return false
+                                if (IllinoisLotteryGames.isAllowedPortalUrl(targetUrl)) {
+                                    return false
+                                }
+                                if (IllinoisLotteryGames.isExternalHttpUrl(targetUrl)) {
+                                    try {
+                                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)))
+                                        Toast.makeText(ctx, "Opened external link in browser", Toast.LENGTH_SHORT).show()
+                                    } catch (_: Exception) {
+                                        Toast.makeText(ctx, "No browser available for external link", Toast.LENGTH_SHORT).show()
+                                    }
+                                    return true
+                                }
+                                return true
                             }
 
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
@@ -834,6 +895,10 @@ fun BatchSubmissionScreen(
                                 if (secure != null) {
                                     view?.stopLoading()
                                     view?.loadUrl(secure)
+                                    return
+                                }
+                                if (url != null && !IllinoisLotteryGames.isAllowedPortalUrl(url)) {
+                                    view?.stopLoading()
                                     return
                                 }
                                 isPageLoading = true

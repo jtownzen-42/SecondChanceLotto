@@ -176,6 +176,33 @@ object IllinoisLotteryGames {
         else SECOND_CHANCE_ENTER_URL
 
     private const val PORTAL_HOST = "illinois.secondchancebonuszone.com"
+    private val ALLOWED_PORTAL_HOSTS = setOf(PORTAL_HOST)
+
+    /**
+     * True only when [url] is an HTTPS URL on an allowlisted Illinois 2nd Chance host with no
+     * embedded userinfo and standard HTTPS port. Used to gate WebView navigation and credential/code
+     * autofill so saved logins are never injected into third-party or lookalike pages.
+     */
+    fun isAllowedPortalUrl(url: String?): Boolean {
+        if (url.isNullOrBlank()) return false
+        val uri = try { java.net.URI(url) } catch (_: java.net.URISyntaxException) { return false }
+        if (!"https".equals(uri.scheme, ignoreCase = true)) return false
+        if (uri.rawUserInfo != null) return false
+        val host = uri.host ?: return false
+        if (ALLOWED_PORTAL_HOSTS.none { it.equals(host, ignoreCase = true) }) return false
+        return uri.port == -1 || uri.port == 443
+    }
+
+    /**
+     * True when [url] is an external http:// or https:// web link that can be handed off to the
+     * device browser instead of opening inside the credentialed WebView.
+     */
+    fun isExternalHttpUrl(url: String?): Boolean {
+        if (url.isNullOrBlank()) return false
+        val uri = try { java.net.URI(url) } catch (_: java.net.URISyntaxException) { return false }
+        val scheme = uri.scheme?.lowercase() ?: return false
+        return (scheme == "http" || scheme == "https") && !uri.host.isNullOrBlank()
+    }
 
     /**
      * The https:// form of a plain http:// 2nd Chance Zone address, or null when [url] isn't one.
@@ -185,7 +212,7 @@ object IllinoisLotteryGames {
         if (url == null || !url.startsWith("http://", ignoreCase = true)) return null
         // Parse properly so "http://portal:80@other.host/" is seen as other.host, not the portal.
         val uri = try { java.net.URI(url) } catch (e: java.net.URISyntaxException) { return null }
-        if (uri.rawUserInfo != null || !PORTAL_HOST.equals(uri.host, ignoreCase = true)) return null
+        if (uri.rawUserInfo != null || ALLOWED_PORTAL_HOSTS.none { it.equals(uri.host, ignoreCase = true) }) return null
         if (uri.port != -1 && uri.port != 80) return null
         return "https://" + url.substring("http://".length).replaceFirst(Regex("^[^/?#]*"), PORTAL_HOST)
     }

@@ -34,7 +34,7 @@ class UserPreferencesRepository(context: Context) {
         if (rawPass.isNotEmpty() && !rawPass.startsWith(ENCRYPTED_PREFIX) && decodedPass.isNotEmpty()) {
             // Migrate legacy plaintext password to encrypted form if Keystore is available
             val encrypted = encryptPassword(decodedPass)
-            if (encrypted.startsWith(ENCRYPTED_PREFIX)) {
+            if (encrypted != null && encrypted.startsWith(ENCRYPTED_PREFIX)) {
                 prefs.edit().putString("account_password", encrypted).apply()
             }
         }
@@ -47,13 +47,22 @@ class UserPreferencesRepository(context: Context) {
         )
     }
 
-    fun saveAccountCredentials(email: String, password: String) {
-        val storedPassword = if (password.isEmpty()) "" else encryptPassword(password)
+    /**
+     * Encrypts and persists credentials via Android Keystore. Returns false without writing
+     * anything if Keystore encryption is unavailable (fail closed: never writes plaintext).
+     */
+    fun saveAccountCredentials(email: String, password: String): Boolean {
+        val storedPassword = if (password.isEmpty()) {
+            ""
+        } else {
+            encryptPassword(password) ?: return false
+        }
         prefs.edit()
             .putString("account_email", email.trim())
             .putString("account_password", storedPassword)
             .apply()
         _userPreferences.value = loadPreferences()
+        return true
     }
 
     fun updateAutoFillEnabled(enabled: Boolean) {
@@ -110,9 +119,9 @@ class UserPreferencesRepository(context: Context) {
             }
         }
 
-        internal fun encryptPassword(plainText: String): String {
+        internal fun encryptPassword(plainText: String): String? {
             if (plainText.isEmpty()) return ""
-            val secretKey = getOrCreateSecretKey() ?: return plainText
+            val secretKey = getOrCreateSecretKey() ?: return null
             return try {
                 val cipher = Cipher.getInstance(TRANSFORMATION)
                 cipher.init(Cipher.ENCRYPT_MODE, secretKey)
@@ -121,7 +130,7 @@ class UserPreferencesRepository(context: Context) {
                 val cipherText = Base64.encodeToString(cipherBytes, Base64.NO_WRAP)
                 "$ENCRYPTED_PREFIX$iv:$cipherText"
             } catch (_: Exception) {
-                plainText
+                null
             }
         }
 

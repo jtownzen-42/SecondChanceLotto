@@ -400,5 +400,12 @@ object SubmissionAutomationHelper {
             .replace("\"", "\\\"")
             .replace("\n", "\\n")
             .replace("\r", "\\r")
+            .replace("\t", "\\t")
+            .replace("\b", "\\b")
+            .replace("\u000C", "\\f")
+            .replace("\u2028", "\\u2028")
+            .replace("\u2029", "\\u2029")
+            .replace("<", "\\u003C")
+            .replace(">", "\\u003E")
     }
 }
