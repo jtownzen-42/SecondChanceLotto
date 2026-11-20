@@ -85,6 +85,7 @@ fun SecondChanceApp(
     val pendingTickets by viewModel.pendingTickets.collectAsStateWithLifecycle()
     val userPreferences by viewModel.userPreferences.collectAsStateWithLifecycle()
     val filterGameNumber by viewModel.filterGameNumber.collectAsStateWithLifecycle()
+    val sessionResetCount by viewModel.sessionResetCount.collectAsStateWithLifecycle()
 
     var showManualEntryDialog by remember { mutableStateOf(false) }
     var showAccountSettingsDialog by remember { mutableStateOf(false) }
@@ -299,7 +300,8 @@ fun SecondChanceApp(
                         },
                         onConfigureCredentials = {
                             showAccountSettingsDialog = true
-                        }
+                        },
+                        sessionResetCount = sessionResetCount
                     )
                 }
 
@@ -340,12 +342,17 @@ fun SecondChanceApp(
             AccountSettingsDialog(
                 userPreferences = userPreferences,
                 onSaveCredentials = { email, pass ->
-                    viewModel.saveAccountCredentials(email, pass)
-                    Toast.makeText(context, "Illinois Lottery login saved!", Toast.LENGTH_SHORT).show()
+                    val saved = viewModel.saveAccountCredentials(email, pass)
+                    if (saved) {
+                        Toast.makeText(context, "Illinois Lottery login saved!", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Secure Keystore unavailable — login not saved.", Toast.LENGTH_LONG).show()
+                    }
+                    saved
                 },
                 onClearCredentials = {
                     viewModel.clearAccountCredentials()
-                    Toast.makeText(context, "Credentials cleared", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Credentials and browser session cleared", Toast.LENGTH_SHORT).show()
                 },
                 onDismiss = { showAccountSettingsDialog = false }
             )

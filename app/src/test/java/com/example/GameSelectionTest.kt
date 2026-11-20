@@ -4,6 +4,7 @@ import com.example.data.IllinoisLotteryGames
 import com.example.scanner.LotteryCodeParser
 import com.example.submission.SubmissionAutomationHelper
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -151,5 +152,41 @@ class GameSelectionTest {
         assertTrue(check.contains("entry-alert"))
         assertTrue(check.contains("ticket not entered"))
         assertTrue(SubmissionAutomationHelper.generateCodeSubmissionScript("C1234567890", "7664").contains("ticket1_1_1"))
+    }
+
+    @Test
+    fun portalUrlAllowlist_acceptsOnlyOfficialHttpsPortal() {
+        assertTrue(IllinoisLotteryGames.isAllowedPortalUrl("https://illinois.secondchancebonuszone.com/2ndchance"))
+        assertTrue(IllinoisLotteryGames.isAllowedPortalUrl("https://illinois.secondchancebonuszone.com/2ndchance/login"))
+        assertTrue(IllinoisLotteryGames.isAllowedPortalUrl("HTTPS://ILLINOIS.SECONDCHANCEBONUSZONE.COM:443/2ndchance/enter"))
+
+        assertFalse(IllinoisLotteryGames.isAllowedPortalUrl("http://illinois.secondchancebonuszone.com/2ndchance"))
+        assertFalse(IllinoisLotteryGames.isAllowedPortalUrl("https://illinois.secondchancebonuszone.com.evil.test/2ndchance/enter"))
+        assertFalse(IllinoisLotteryGames.isAllowedPortalUrl("https://evil.test/2ndchance/enter"))
+        assertFalse(IllinoisLotteryGames.isAllowedPortalUrl("https://user@illinois.secondchancebonuszone.com/2ndchance"))
+        assertFalse(IllinoisLotteryGames.isAllowedPortalUrl("https://illinois.secondchancebonuszone.com:8443/2ndchance"))
+        assertFalse(IllinoisLotteryGames.isAllowedPortalUrl("file:///etc/passwd"))
+        assertFalse(IllinoisLotteryGames.isAllowedPortalUrl("javascript:alert(1)"))
+        assertFalse(IllinoisLotteryGames.isAllowedPortalUrl(null))
+        assertFalse(IllinoisLotteryGames.isAllowedPortalUrl(""))
+    }
+
+    @Test
+    fun externalHttpUrl_recognizesOnlyHttpAndHttps() {
+        assertTrue(IllinoisLotteryGames.isExternalHttpUrl("https://www.illinoislottery.com/rules"))
+        assertTrue(IllinoisLotteryGames.isExternalHttpUrl("http://example.com"))
+        assertFalse(IllinoisLotteryGames.isExternalHttpUrl("file:///sdcard/test.html"))
+        assertFalse(IllinoisLotteryGames.isExternalHttpUrl("javascript:alert(1)"))
+        assertFalse(IllinoisLotteryGames.isExternalHttpUrl(null))
+    }
+
+    @Test
+    fun loginScript_usesPrototypeSetterAndEscapesControlChars() {
+        val js = SubmissionAutomationHelper.generateLoginScript(
+            "a@b.com",
+            "p'\"\\<\u2028\u2029>"
+        )
+        assertTrue(js.contains("HTMLInputElement.prototype"))
+        assertTrue(js.contains("p\\'\\\"\\\\\\u003C\\u2028\\u2029\\u003E"))
     }
 }

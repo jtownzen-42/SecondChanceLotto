@@ -1,6 +1,8 @@
 package com.example.ui
 
 import android.app.Application
+import android.webkit.CookieManager
+import android.webkit.WebStorage
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
@@ -58,6 +60,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _filterGameNumber = MutableStateFlow<String?>(null)
     val filterGameNumber: StateFlow<String?> = _filterGameNumber.asStateFlow()
 
+    private val _sessionResetCount = MutableStateFlow(0)
+    val sessionResetCount: StateFlow<Int> = _sessionResetCount.asStateFlow()
+
     init {
         // Earlier builds seeded fake demo tickets into the database. Remove them so they
         // can never be submitted as if they were real entries.
@@ -108,12 +113,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun saveAccountCredentials(email: String, pass: String) {
-        userPreferencesRepository.saveAccountCredentials(email, pass)
+    fun saveAccountCredentials(email: String, pass: String): Boolean {
+        return userPreferencesRepository.saveAccountCredentials(email, pass)
     }
 
     fun clearAccountCredentials() {
         userPreferencesRepository.clearCredentials()
+        try {
+            CookieManager.getInstance().apply {
+                removeAllCookies(null)
+                flush()
+            }
+            WebStorage.getInstance().deleteAllData()
+        } catch (_: Exception) {
+        }
+        _sessionResetCount.value++
     }
 
     fun setFilterGame(gameNumber: String?) {
