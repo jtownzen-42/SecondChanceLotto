@@ -514,6 +514,54 @@ object SubmissionAutomationHelper {
         """.trimIndent()
     }
 
+    /**
+     * Reads the Enter Your Tickets "Select game" list without touching it: every option's value and
+     * text, URI-encoded, as `GL1|exact|value:text,...`. `exact` is 1 when the list came from the
+     * form's own `select#promotion_game_id`. `GL1|0|` means there is no game list on the page.
+     */
+    fun generateReadGameListScript(): String {
+        return """
+            (function() {
+                function enc(s) { return encodeURIComponent(s || ''); }
+                var exact = document.getElementById('promotion_game_id');
+                var sel = exact;
+                if (!sel) {
+                    var all = document.querySelectorAll('select');
+                    for (var i = 0; i < all.length && !sel; i++) {
+                        if (Array.prototype.some.call(all[i].options, function(o) { return /-\s*[0-9]{4}\s*${'$'}/.test(o.text); })) sel = all[i];
+                    }
+                }
+                if (!sel) return 'GL1|0|';
+                var out = [];
+                for (var j = 0; j < sel.options.length; j++) {
+                    var o = sel.options[j];
+                    out.push(enc(o.value) + ':' + enc((o.text || '').replace(/\s+/g, ' ').trim()));
+                }
+                return 'GL1|' + (exact ? '1' : '0') + '|' + out.join(',');
+            })();
+        """.trimIndent()
+    }
+
+    /** The game list from [generateReadGameListScript], or null when the page has none (yet). */
+    fun parsePortalGameList(rawJsResult: String?): com.jtownzen.secondchanceil.data.PortalGameList? {
+        val s = unquoteJsString(rawJsResult)
+        if (!s.startsWith("GL1|")) return null
+        val f = s.split('|', limit = 3)
+        if (f.size < 3 || f[2].isEmpty()) return null
+        fun dec(x: String): String = try {
+            java.net.URLDecoder.decode(x, "UTF-8")
+        } catch (_: Exception) {
+            ""
+        }
+        val options = f[2].split(',').mapNotNull { pair ->
+            val parts = pair.split(':')
+            if (parts.size != 2) return@mapNotNull null
+            com.jtownzen.secondchanceil.data.GameLearner.parsePortalOption(dec(parts[0]), dec(parts[1]))
+        }
+        if (options.isEmpty()) return null
+        return com.jtownzen.secondchanceil.data.PortalGameList(options, authoritative = f[1] == "1")
+    }
+
     private fun escapeJsString(str: String): String {
         return str.replace("\\", "\\\\")
             .replace("'", "\\'")

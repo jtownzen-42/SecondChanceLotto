@@ -48,6 +48,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Key
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -90,7 +91,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.jtownzen.secondchanceil.data.GameSyncReport
 import com.jtownzen.secondchanceil.data.LotteryTicket
+import com.jtownzen.secondchanceil.data.PortalGameList
+import com.jtownzen.secondchanceil.ui.LearnedGamesDialog
+import androidx.compose.runtime.collectAsState
 import com.jtownzen.secondchanceil.data.TicketStatus
 import com.jtownzen.secondchanceil.data.UserPreferences
 import com.jtownzen.secondchanceil.ui.theme.LotteryEmerald
@@ -117,7 +122,10 @@ fun BatchSubmissionScreen(
     onTicketDuplicate: (ticketId: Long) -> Unit,
     onConfigureCredentials: () -> Unit,
     modifier: Modifier = Modifier,
-    sessionResetCount: Int = 0
+    sessionResetCount: Int = 0,
+    /** Merges the portal's Select game list into the app's games; returns what changed. */
+    onPortalGameList: (PortalGameList) -> GameSyncReport = { GameSyncReport.NONE },
+    onRemoveLearnedGame: (gameNumber: String) -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -162,6 +170,12 @@ fun BatchSubmissionScreen(
             guardPrefs.edit().putLong("locked_until", until).apply()
         }
     }
+    // Game list sync: read the portal's Select game list whenever Enter Your Tickets loads (at most
+    // every couple of minutes), or on demand from the Update games button.
+    var gameListReadRequest by remember { mutableStateOf(0) }
+    var manualGameSync by remember { mutableStateOf(false) }
+    var lastAutoGameSyncAt by remember { mutableStateOf(0L) }
+    var gameSyncDialog by remember { mutableStateOf<GameSyncReport?>(null) }
     // Tickets the site rejected in this session; Auto-Fill asks before trying them again.
     val rejectedTicketIds = remember { mutableStateListOf<Long>() }
     var confirmRetryFor by remember { mutableStateOf<LotteryTicket?>(null) }
@@ -297,6 +311,46 @@ fun BatchSubmissionScreen(
         }
     }
 
+    // Reads the Select game list once the page has built it (it is a script-built form).
+    LaunchedEffect(gameListReadRequest) {
+        if (gameListReadRequest == 0) return@LaunchedEffect
+        val manual = manualGameSync
+        // The dropdown is script-built: accept it only once two reads a second apart agree, so a
+        // half-filled list can never retire the games that hadn't loaded yet.
+        var list: PortalGameList? = null
+        var previous: PortalGameList? = null
+        for (attempt in 1..15) {
+            delay(1000L)
+            val wv = webViewInstance ?: break
+            val read = SubmissionAutomationHelper.parsePortalGameList(runJs(wv, SubmissionAutomationHelper.generateReadGameListScript()))
+            if (read != null && read == previous) {
+                list = read
+                break
+            }
+            previous = read
+        }
+        manualGameSync = false
+        val found = list
+        if (found == null) {
+            if (manual) {
+                Toast.makeText(
+                    context,
+                    if (currentWebUrl.contains("login", ignoreCase = true)) "Log in to the 2nd Chance Zone, then tap Update games again."
+                    else "Couldn't find the game list on Enter Your Tickets.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            return@LaunchedEffect
+        }
+        val report = onPortalGameList(found)
+        if (manual) {
+            gameSyncDialog = report
+        } else if (report.added.isNotEmpty()) {
+            val names = report.added.joinToString(", ") { "${it.title} (#${it.gameNumber})" }
+            Toast.makeText(context, "New on the 2nd Chance Zone: $names. Added to your games.", Toast.LENGTH_LONG).show()
+        }
+    }
+
     // Picks the ticket's game in the portal's "Select game" list, fills the entry code and submits.
     // If the current page has no entry form, opens "Enter Your Tickets" first and waits for it.
     fun startAutoFill(ticket: LotteryTicket, retryConfirmed: Boolean = false) {
@@ -380,6 +434,15 @@ fun BatchSubmissionScreen(
             }
             Toast.makeText(context, message, Toast.LENGTH_LONG).show()
         }
+    }
+    gameSyncDialog?.let { report ->
+        val learnedState by IllinoisLotteryGames.learnedState.collectAsState()
+        LearnedGamesDialog(
+            report = report,
+            state = learnedState,
+            onRemove = onRemoveLearnedGame,
+            onDismiss = { gameSyncDialog = null }
+        )
     }
     confirmRetryFor?.let { ticket ->
         AlertDialog(
@@ -489,6 +552,23 @@ fun BatchSubmissionScreen(
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
+                            }
+                            IconButton(
+                                onClick = {
+                                    manualGameSync = true
+                                    if (currentWebUrl.contains("/2ndchance/enter")) {
+                                        gameListReadRequest++
+                                    } else {
+                                        webViewInstance?.loadUrl(IllinoisLotteryGames.SECOND_CHANCE_ENTER_URL)
+                                    }
+                                },
+                                modifier = Modifier.testTag("update_games_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Sync,
+                                    contentDescription = "Update games from the 2nd Chance Zone",
+                                    tint = if (manualGameSync) LuckyGold else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                             IconButton(onClick = onConfigureCredentials) {
                                 Icon(
@@ -919,6 +999,18 @@ fun BatchSubmissionScreen(
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 isPageLoading = false
                                 url?.let { currentWebUrl = it }
+
+                                // Learn the portal's current game list from Enter Your Tickets.
+                                if (url != null && url.contains("/2ndchance/enter")) {
+                                    val now = System.currentTimeMillis()
+                                    if (manualGameSync || now - lastAutoGameSyncAt > 2 * 60_000L) {
+                                        lastAutoGameSyncAt = now
+                                        gameListReadRequest++
+                                    }
+                                } else if (manualGameSync && url != null && url.contains("login", ignoreCase = true)) {
+                                    manualGameSync = false
+                                    Toast.makeText(context, "Log in to the 2nd Chance Zone, then tap Update games again.", Toast.LENGTH_LONG).show()
+                                }
 
                                 // Check if user successfully submitted code via DOM inspection
                                 // Only acts on a ticket whose code we just injected, so reloading
