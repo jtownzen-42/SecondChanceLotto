@@ -6,6 +6,11 @@ import android.webkit.WebStorage
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.jtownzen.secondchanceil.data.AppDatabase
+import com.jtownzen.secondchanceil.data.GameLearner
+import com.jtownzen.secondchanceil.data.GameSyncReport
+import com.jtownzen.secondchanceil.data.IllinoisLotteryGames
+import com.jtownzen.secondchanceil.data.LearnedGamesStore
+import com.jtownzen.secondchanceil.data.PortalGameList
 import com.jtownzen.secondchanceil.data.LotteryTicket
 import com.jtownzen.secondchanceil.data.TicketRepository
 import com.jtownzen.secondchanceil.data.TicketStatus
@@ -30,6 +35,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val database = AppDatabase.getDatabase(application)
     private val ticketRepository = TicketRepository(database.ticketDao())
     private val userPreferencesRepository = UserPreferencesRepository(application)
+    private val learnedGamesStore = LearnedGamesStore(application)
 
     val allTickets: StateFlow<List<LotteryTicket>> = ticketRepository.allTickets
         .stateIn(
@@ -64,6 +70,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val sessionResetCount: StateFlow<Int> = _sessionResetCount.asStateFlow()
 
     init {
+        IllinoisLotteryGames.applyLearned(learnedGamesStore.load())
         // Earlier builds seeded fake demo tickets into the database. Remove them so they
         // can never be submitted as if they were real entries.
         viewModelScope.launch {
@@ -81,8 +88,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun saveTicket(ticket: LotteryTicket, onResult: (saved: Boolean) -> Unit = {}) {
         viewModelScope.launch {
-            onResult(ticketRepository.insertTicketIfNew(ticket))
+            val saved = ticketRepository.insertTicketIfNew(ticket)
+            if (saved) learnLetterFromTicket(ticket)
+            onResult(saved)
         }
+    }
+
+    /** A saved ticket confirms its game's entry-code letter, so later scans can find the game by code. */
+    private fun learnLetterFromTicket(ticket: LotteryTicket) {
+        val next = GameLearner.learnLetterFromTicket(
+            IllinoisLotteryGames.learnedState.value,
+            ticket.gameNumber,
+            ticket.entryCode,
+            IllinoisLotteryGames.activeGames
+        ) ?: return
+        storeLearned(next)
+    }
+
+    /** Merges the portal's Select game list; returns what changed. */
+    fun onPortalGameList(list: PortalGameList): GameSyncReport {
+        val (next, report) = GameLearner.mergePortalList(
+            IllinoisLotteryGames.learnedState.value,
+            IllinoisLotteryGames.builtInActiveGames,
+            list,
+            System.currentTimeMillis()
+        )
+        if (next != IllinoisLotteryGames.learnedState.value) storeLearned(next)
+        return report
+    }
+
+    /** "Learn this game" from the scan review sheet. */
+    fun learnGame(gameNumber: String, title: String, entryCode: String?) {
+        storeLearned(
+            GameLearner.learnGame(
+                IllinoisLotteryGames.learnedState.value,
+                gameNumber,
+                title,
+                entryCode,
+                IllinoisLotteryGames.builtInActiveGames,
+                System.currentTimeMillis()
+            )
+        )
+    }
+
+    fun removeLearnedGame(gameNumber: String) {
+        storeLearned(GameLearner.remove(IllinoisLotteryGames.learnedState.value, gameNumber))
+    }
+
+    private fun storeLearned(state: com.jtownzen.secondchanceil.data.LearnedGamesState) {
+        IllinoisLotteryGames.applyLearned(state)
+        learnedGamesStore.save(state)
     }
 
     fun deleteTicket(ticket: LotteryTicket) {

@@ -1,5 +1,9 @@
 package com.jtownzen.secondchanceil.data
 
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
 /**
  * An Illinois Lottery 2nd Chance promotion run on the 2nd Chance Zone.
  *
@@ -82,8 +86,11 @@ object IllinoisLotteryGames {
      * "confirmed" = seen on a real ticket (Jason's tickets, 2026-11-09 and 11-13); the rest follow the pattern
      * and should be confirmed when a ticket of that game is scanned. Keep docs/second-chance-games.md
      * in step with this list.
+     *
+     * Games learned since the build (from the portal's game list or a scanned ticket) are merged in
+     * by [activeGames]; use that, not this list, everywhere else.
      */
-    val activeGames: List<LotteryGame> = listOf(
+    val builtInActiveGames: List<LotteryGame> = listOf(
         // 12 Weeks of Winning (2026 holiday tickets)
         LotteryGame("7675", "Holiday Ca\$h", "\$1", "\$500", TWELVE_WEEKS_OF_WINNING,
             entryCodeLetter = "E", entryCodeLetterConfirmed = true),
@@ -158,7 +165,68 @@ object IllinoisLotteryGames {
         LotteryGame("7673", "\$2,000,000 Multiplier Bonanza", "\$20", "\$2,000,000")
     )
 
-    val allGames: List<LotteryGame> = activeGames + otherGames
+    /** Stands in for a promotion the app learned about from the portal's game list. */
+    val LEARNED_PROMOTION = SecondChancePromotion(
+        name = "2nd Chance Zone",
+        portalUrl = SECOND_CHANCE_ZONE_URL,
+        finalEntryDeadline = "see the 2nd Chance Zone",
+        finalDrawingDate = "",
+        prizeSummary = "Found on the 2nd Chance Zone's game list"
+    )
+
+    private val learned = MutableStateFlow(LearnedGamesState())
+
+    /** What the app has learned. Composables collect this so game lists refresh when it changes. */
+    val learnedState: StateFlow<LearnedGamesState> = learned.asStateFlow()
+
+    fun applyLearned(state: LearnedGamesState) {
+        learned.value = state
+    }
+
+    private fun LearnedGame.toLotteryGame(enterable: Boolean) = LotteryGame(
+        gameNumber = gameNumber,
+        title = title,
+        ticketPrice = "",
+        topPrize = "",
+        promotion = if (enterable) LEARNED_PROMOTION else null,
+        entryCodeLetter = entryCodeLetter,
+        entryCodeLetterConfirmed = letterFromTicket
+    )
+
+    /**
+     * Games that can be entered now: the built-in list minus any the portal stopped listing, with
+     * letters confirmed on real tickets applied, then games learned since the build.
+     */
+    val activeGames: List<LotteryGame>
+        get() {
+            val st = learned.value
+            val overlay = st.games.associateBy { it.gameNumber }
+            val builtInNumbers = builtInActiveGames.map { it.gameNumber }.toSet()
+            val builtIn = builtInActiveGames
+                .filter { it.gameNumber !in st.retiredBuiltIns }
+                .map { g ->
+                    val o = overlay[g.gameNumber]
+                    if (o?.letterFromTicket == true && o.entryCodeLetter != null) {
+                        g.copy(entryCodeLetter = o.entryCodeLetter, entryCodeLetterConfirmed = true)
+                    } else g
+                }
+            val learnedGames = st.games
+                .filter { it.gameNumber !in builtInNumbers && it.onPortal }
+                .map { it.toLotteryGame(enterable = true) }
+            return builtIn + learnedGames
+        }
+
+    /** Every game the app can recognise; ones with no open promotion have a null promotion. */
+    val allGames: List<LotteryGame>
+        get() {
+            val st = learned.value
+            val active = activeGames
+            val seen = active.map { it.gameNumber }.toMutableSet()
+            val ended = builtInActiveGames.filter { it.gameNumber in st.retiredBuiltIns }.map { it.copy(promotion = null) } +
+                st.games.filter { !it.onPortal && it.gameNumber !in seen }.map { it.toLotteryGame(enterable = false) }
+            seen += ended.map { it.gameNumber }
+            return active + ended + otherGames.filter { it.gameNumber !in seen }
+        }
 
     fun findGameByNumber(gameNumber: String): LotteryGame? {
         val clean = gameNumber.trim()
@@ -219,7 +287,9 @@ object IllinoisLotteryGames {
 
     fun findGameByEntryCode(entryCode: String): LotteryGame? {
         val letter = entryCode.trim().firstOrNull()?.takeIf { it.isLetter() }?.uppercase() ?: return null
-        return activeGames.filter { it.entryCodeLetter == letter }.singleOrNull()
+        val candidates = activeGames.filter { it.entryCodeLetter == letter }
+        // A letter confirmed on a real ticket beats one inferred from the pattern.
+        return candidates.filter { it.entryCodeLetterConfirmed }.singleOrNull() ?: candidates.singleOrNull()
     }
 
     fun findGameByName(name: String): LotteryGame? {

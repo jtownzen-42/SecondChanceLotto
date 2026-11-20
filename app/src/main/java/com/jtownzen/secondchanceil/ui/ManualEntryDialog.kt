@@ -27,6 +27,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,8 +56,11 @@ fun ManualEntryDialog(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     // Only games with an open 2nd Chance promotion can be entered.
-    val defaultGame = IllinoisLotteryGames.activeGames.find { it.gameNumber == initialGameNumber?.trim() }
-        ?: IllinoisLotteryGames.activeGames.first()
+    val learnedGames by IllinoisLotteryGames.learnedState.collectAsState()
+    val games = remember(learnedGames) { IllinoisLotteryGames.activeGames }
+    val defaultGame = games.find { it.gameNumber == initialGameNumber?.trim() }
+        ?: games.firstOrNull()
+        ?: IllinoisLotteryGames.builtInActiveGames.first()
 
     var selectedGameNumber by remember { mutableStateOf(defaultGame.gameNumber) }
     var selectedGameTitle by remember { mutableStateOf(defaultGame.title) }
@@ -135,13 +139,14 @@ fun ManualEntryDialog(
                     expanded = gameDropdownExpanded,
                     onDismissRequest = { gameDropdownExpanded = false }
                 ) {
-                    IllinoisLotteryGames.activeGames.forEach { game ->
+                    games.forEach { game ->
                         DropdownMenuItem(
                             text = {
                                 Column {
                                     Text(game.title, fontWeight = FontWeight.Bold)
                                     Text(
-                                        "Game #${game.gameNumber} • ${game.ticketPrice} • ${game.promotion?.name} • enter by ${game.drawingDeadline}",
+                                        listOf("Game #${game.gameNumber}", game.ticketPrice, game.promotion?.name.orEmpty(), "enter by ${game.drawingDeadline}")
+                                            .filter { it.isNotBlank() }.joinToString(" • "),
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                 }

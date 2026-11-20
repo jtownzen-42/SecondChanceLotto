@@ -92,6 +92,10 @@ import com.jtownzen.secondchanceil.data.LotteryTicket
 import com.jtownzen.secondchanceil.data.TicketStatus
 import com.jtownzen.secondchanceil.ui.ConfirmUnusualCodeDialog
 import com.jtownzen.secondchanceil.ui.EntryCodeField
+import com.jtownzen.secondchanceil.ui.LearnGameDialog
+import androidx.compose.material3.TextButton
+import com.jtownzen.secondchanceil.data.GameLearner
+import androidx.compose.runtime.collectAsState
 import com.jtownzen.secondchanceil.ui.theme.LotteryEmerald
 import com.jtownzen.secondchanceil.ui.theme.LuckyGold
 import com.google.mlkit.vision.common.InputImage
@@ -110,7 +114,9 @@ import kotlinx.coroutines.withContext
 fun CameraScannerScreen(
     onTicketSaved: (LotteryTicket) -> Unit,
     onManualEntryRequested: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Adds a game the app doesn't know yet (the review sheet's "Add a new game"). */
+    onLearnGame: (gameNumber: String, title: String, entryCode: String?) -> Unit = { _, _, _ -> }
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -558,6 +564,7 @@ fun CameraScannerScreen(
             TicketReviewSheet(
                 initialData = parsedCandidate!!,
                 photoUri = capturedImageUri,
+                onLearnGame = onLearnGame,
                 onDismiss = {
                     deleteUnsavedPhotoFile(context, capturedImageUri)
                     capturedImageUri = null
@@ -581,8 +588,12 @@ fun TicketReviewSheet(
     initialData: ParsedLotteryData,
     photoUri: String?,
     onDismiss: () -> Unit,
-    onSave: (LotteryTicket) -> Unit
+    onSave: (LotteryTicket) -> Unit,
+    onLearnGame: (gameNumber: String, title: String, entryCode: String?) -> Unit = { _, _, _ -> }
 ) {
+    // Re-read the game list whenever a game is learned, so the new game can be saved at once.
+    val learnedGames by IllinoisLotteryGames.learnedState.collectAsState()
+    var showLearnGame by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     // No made-up default: if the scan didn't recognise the game, the user must pick it.
@@ -667,7 +678,9 @@ fun TicketReviewSheet(
 
             // Game Selection Dropdown
             Box(modifier = Modifier.fillMaxWidth()) {
-                val knownGame = IllinoisLotteryGames.findGameByNumber(selectedGameNumber)
+                val knownGame = remember(selectedGameNumber, learnedGames) {
+                    IllinoisLotteryGames.findGameByNumber(selectedGameNumber)
+                }
                 OutlinedTextField(
                     value = if (selectedGameNumber.isBlank()) "Select the game on your ticket" else "$selectedGameTitle (#$selectedGameNumber)",
                     onValueChange = {},
@@ -705,7 +718,8 @@ fun TicketReviewSheet(
                                 Column {
                                     Text(game.title, fontWeight = FontWeight.Bold)
                                     Text(
-                                        "Game #${game.gameNumber} • ${game.ticketPrice} • ${game.promotion?.name} • enter by ${game.drawingDeadline}",
+                                        listOf("Game #${game.gameNumber}", game.ticketPrice, game.promotion?.name.orEmpty(), "enter by ${game.drawingDeadline}")
+                                            .filter { it.isNotBlank() }.joinToString(" • "),
                                         style = MaterialTheme.typography.bodySmall
                                     )
                                 }
@@ -719,6 +733,37 @@ fun TicketReviewSheet(
                         )
                     }
                 }
+            }
+
+            val gameIsEnterable = remember(selectedGameNumber, learnedGames) {
+                IllinoisLotteryGames.findGameByNumber(selectedGameNumber)?.isSecondChanceEligible == true
+            }
+            if (!gameIsEnterable) {
+                TextButton(
+                    onClick = { showLearnGame = true },
+                    modifier = Modifier.testTag("learn_new_game_button")
+                ) {
+                    Text(
+                        if (GameLearner.isGameNumber(selectedGameNumber)) "New game? Add #$selectedGameNumber to the app"
+                        else "New game? Add it to the app",
+                        color = LuckyGold
+                    )
+                }
+            }
+            if (showLearnGame) {
+                LearnGameDialog(
+                    initialGameNumber = selectedGameNumber,
+                    initialTitle = selectedGameTitle.takeIf { IllinoisLotteryGames.findGameByNumber(selectedGameNumber) == null }.orEmpty(),
+                    onLearn = { number, title ->
+                        onLearnGame(number, title, entryCode.takeIf { LotteryCodeParser.isValidEntryCode(it) })
+                        val learned = IllinoisLotteryGames.findGameByNumber(number)
+                        selectedGameNumber = number
+                        selectedGameTitle = learned?.title ?: title.ifBlank { GameLearner.placeholderTitle(number) }
+                        drawingDeadline = learned?.drawingDeadline ?: IllinoisLotteryGames.LEARNED_PROMOTION.finalEntryDeadline
+                        showLearnGame = false
+                    },
+                    onDismiss = { showLearnGame = false }
+                )
             }
 
             Spacer(modifier = Modifier.height(12.dp))

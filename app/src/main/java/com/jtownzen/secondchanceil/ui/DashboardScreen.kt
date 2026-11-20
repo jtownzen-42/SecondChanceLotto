@@ -46,6 +46,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -78,6 +80,8 @@ fun DashboardScreen(
     onViewGameTicketsClicked: (gameNumber: String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val learnedGames by IllinoisLotteryGames.learnedState.collectAsState()
+    val activeGames = remember(learnedGames) { IllinoisLotteryGames.activeGames }
     val pendingTickets = tickets.filter { it.status == TicketStatus.PENDING }
     val submittedTickets = tickets.filter { it.status == TicketStatus.SUBMITTED }
 
@@ -285,8 +289,8 @@ fun DashboardScreen(
             }
         }
 
-        // List of Games Cards
-        items(IllinoisLotteryGames.activeGames) { game ->
+        // List of Games Cards (learned games included; the list refreshes when one is learned)
+        items(activeGames) { game ->
             val gameTickets = ticketsByGame[game.gameNumber] ?: emptyList()
             val gamePendingCount = gameTickets.count { it.status == TicketStatus.PENDING }
             val gameSubmittedCount = gameTickets.count { it.status == TicketStatus.SUBMITTED }
@@ -389,7 +393,8 @@ fun GamePromotionCard(
                     )
 
                     Text(
-                        text = "Prize: ${game.topPrize}",
+                        // Games learned from the portal list come without price or prize details.
+                        text = if (game.topPrize.isNotBlank()) "Prize: ${game.topPrize}" else "Added from the 2nd Chance Zone",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

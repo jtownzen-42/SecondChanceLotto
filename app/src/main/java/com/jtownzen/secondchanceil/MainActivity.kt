@@ -284,6 +284,10 @@ fun SecondChanceApp(
                         },
                         onManualEntryRequested = {
                             showManualEntryDialog = true
+                        },
+                        onLearnGame = { number, title, code ->
+                            viewModel.learnGame(number, title, code)
+                            Toast.makeText(context, "Game #$number added. Its official name fills in from the 2nd Chance Zone.", Toast.LENGTH_LONG).show()
                         }
                     )
                 }
@@ -301,7 +305,9 @@ fun SecondChanceApp(
                         onConfigureCredentials = {
                             showAccountSettingsDialog = true
                         },
-                        sessionResetCount = sessionResetCount
+                        sessionResetCount = sessionResetCount,
+                        onPortalGameList = viewModel::onPortalGameList,
+                        onRemoveLearnedGame = viewModel::removeLearnedGame
                     )
                 }
 
