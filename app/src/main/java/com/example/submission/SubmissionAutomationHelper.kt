@@ -63,16 +63,19 @@ object SubmissionAutomationHelper {
                                     document.querySelector('input[name*="pass" i]') ||
                                     document.querySelector('input[id*="pass" i]');
                                     
+                    function setInputValue(el, v) {
+                        var desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+                        if (desc && desc.set) { desc.set.call(el, v); } else { el.value = v; }
+                        el.dispatchEvent(new Event('input', { bubbles: true }));
+                        el.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+
                     if (emailInput) {
-                        emailInput.value = '$safeEmail';
-                        emailInput.dispatchEvent(new Event('input', { bubbles: true }));
-                        emailInput.dispatchEvent(new Event('change', { bubbles: true }));
+                        setInputValue(emailInput, '$safeEmail');
                     }
                     
                     if (passInput) {
-                        passInput.value = '$safePass';
-                        passInput.dispatchEvent(new Event('input', { bubbles: true }));
-                        passInput.dispatchEvent(new Event('change', { bubbles: true }));
+                        setInputValue(passInput, '$safePass');
                     }
                     
                     if (emailInput && passInput) {
