@@ -26,8 +26,10 @@ by hand — forty times in a row.
 - **Enter it** — the Submit screen opens the official 2nd Chance entry page in an in-app WebView,
   selects the right game, fills the entry code, and reads the portal's own answer back
   (accepted / duplicate / rejected / locked out) so the vault stays accurate.
-- **Track it** — the Vault lists everything scanned with filters for pending, submitted and
-  failed, plus retry and edit on anything the portal turned down.
+- **Track it** — the Vault lists everything scanned, with filters for pending, submitted and
+  duplicate, and requeue or delete on any ticket. A ticket the portal rejects stays pending
+  rather than moving to a state of its own; Auto-Fill remembers it for the session and asks
+  before trying that code again.
 
 ## Scope and conduct
 
@@ -120,10 +122,17 @@ docs/second-chance-games.md      Live game list, code letters, deadlines
 
 ## Building
 
-Prerequisites: Android Studio (Ladybug or newer), JDK 17, Android SDK 36.
+Prerequisites: Android Studio Panda 2 (2025.3.2) or newer, JDK 17, Android SDK Platform 36.1.
 
 ```
 git clone https://github.com/jtownzen-42/SecondChanceLotto.git
+```
+
+`debug.keystore` is gitignored, so a fresh clone does not have one and the `debugConfig`
+signing config fails. Generate one in the repository root, with the same parameters CI uses:
+
+```
+keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
 ```
 
 Open the folder in Android Studio and run the `app` configuration on a device or emulator.
