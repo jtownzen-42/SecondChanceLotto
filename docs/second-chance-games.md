@@ -2,7 +2,7 @@
 
 The games in the 2nd Chance Zone's **Enter Your Tickets → Select game** list, with the letter every
 entry code for that game starts with. The app's copy of this list is `activeGames` in
-`app/src/main/java/com/example/data/LotteryGame.kt`; update both together.
+`app/src/main/java/com/jtownzen/secondchanceil/data/LotteryGame.kt`; update both together.
 
 Last checked against the live "Select game" list: **2026-11-13**.
 
