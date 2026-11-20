@@ -27,9 +27,10 @@ by hand — forty times in a row.
   selects the right game, fills the entry code, and reads the portal's own answer back
   (accepted / duplicate / rejected / locked out) so the vault stays accurate.
 - **Track it** — the Vault lists everything scanned, with filters for pending, submitted and
-  duplicate, and requeue or delete on any ticket. A ticket the portal rejects stays pending
-  rather than moving to a state of its own; Auto-Fill remembers it for the session and asks
-  before trying that code again.
+  duplicate, delete on any ticket, and "Back to queue" on tickets that have left pending. A
+  ticket the portal rejects stays pending rather than moving to a state of its own, and
+  Auto-Fill asks before retrying that code for as long as the Submit screen stays open —
+  leaving the screen clears that list.
 
 ## Scope and conduct
 
@@ -49,7 +50,7 @@ This is a personal utility, not a Lottery product.
 | **Dashboard** | Counts of scanned / pending / submitted, and countdowns to each promotion's final entry date |
 | **Scan** | Camera viewfinder, OCR, and a review sheet for correcting the code and game before saving |
 | **Submit** | In-app WebView on the official portal, with auto-fill of game and entry code and result read-back |
-| **Vault** | Searchable ticket ledger with status filters, edit, retry and delete |
+| **Vault** | Searchable ticket ledger with status filters, delete, and requeue for tickets that have left pending |
 
 ## Architecture
 
