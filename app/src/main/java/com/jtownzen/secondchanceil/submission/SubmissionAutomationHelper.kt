@@ -14,6 +14,23 @@ enum class PortalResult {
     UNKNOWN
 }
 
+/**
+ * What the result check saw on the page, gathered by [SubmissionAutomationHelper.generateCheckSuccessScript]
+ * and decided in Kotlin by [SubmissionAutomationHelper.classify] so the rules can be unit-tested.
+ */
+data class PortalSnapshot(
+    /** The lockout sentence is visible anywhere on the page. */
+    val lockout: Boolean,
+    /** Submit was pressed since the last Auto-Fill, at least 1.5 s ago. */
+    val submitSeen: Boolean,
+    /** `#entry-alert` is on screen with text: the site's own answer to the last entry. */
+    val entryAlertVisible: Boolean,
+    val entryAlertClass: String,
+    val entryAlertText: String,
+    /** Other visible alert-like elements (class to text), used only when `#entry-alert` is absent. */
+    val otherAlerts: List<Pair<String, String>>
+)
+
 object SubmissionAutomationHelper {
 
     /**
@@ -29,23 +46,116 @@ object SubmissionAutomationHelper {
     }
 
     /**
-     * Maps the raw value returned by `evaluateJavascript` for [generateCheckSuccessScript]
-     * (a JSON string such as `"SUBMITTED"`, or `null`) to a [PortalResult].
+     * Maps the raw value returned by `evaluateJavascript` for [generateCheckSuccessScript] to a
+     * [PortalResult]. Also accepts the older plain answers (`"SUBMITTED"`, `"REJECTED|S"`...).
      */
-    fun parsePortalResult(rawJsResult: String?): PortalResult =
-        when (unquoteJsString(rawJsResult).substringBefore('|')) {
+    fun parsePortalResult(rawJsResult: String?): PortalResult {
+        parsePortalSnapshot(rawJsResult)?.let { return classify(it) }
+        return when (unquoteJsString(rawJsResult).substringBefore('|')) {
             "SUBMITTED" -> PortalResult.SUBMITTED
             "DUPLICATE" -> PortalResult.DUPLICATE
             "REJECTED" -> PortalResult.REJECTED
             "LOCKED" -> PortalResult.LOCKED
             else -> PortalResult.UNKNOWN
         }
+    }
 
     /**
      * True when the result check saw the user (or the app) press Submit on the page since the
      * last Auto-Fill, so a message on the page can be trusted as the answer to that attempt.
      */
-    fun submitSeen(rawJsResult: String?): Boolean = unquoteJsString(rawJsResult).endsWith("|S")
+    fun submitSeen(rawJsResult: String?): Boolean =
+        parsePortalSnapshot(rawJsResult)?.submitSeen ?: unquoteJsString(rawJsResult).endsWith("|S")
+
+    /** The site's own words for the last answer (the `#entry-alert` text), or "" when there is none. */
+    fun portalMessage(rawJsResult: String?): String {
+        val snap = parsePortalSnapshot(rawJsResult) ?: return ""
+        if (snap.entryAlertVisible) return snap.entryAlertText
+        return snap.otherAlerts.firstOrNull { classifyAnswer(it.second, it.first, trustClass = false) != PortalResult.UNKNOWN }
+            ?.second.orEmpty()
+    }
+
+    /** Reads the `SC1|...` snapshot produced by [generateCheckSuccessScript], or null for anything else. */
+    fun parsePortalSnapshot(rawJsResult: String?): PortalSnapshot? {
+        val s = unquoteJsString(rawJsResult)
+        if (!s.startsWith("SC1|")) return null
+        val f = s.split('|')
+        if (f.size < 7) return null
+        fun dec(x: String): String = try {
+            java.net.URLDecoder.decode(x, "UTF-8")
+        } catch (_: Exception) {
+            ""
+        }
+        val others = if (f[6].isEmpty()) emptyList() else f[6].split(',').mapNotNull { pair ->
+            val parts = pair.split(':')
+            if (parts.size == 2) dec(parts[0]) to dec(parts[1]) else null
+        }
+        return PortalSnapshot(
+            lockout = f[1] == "1",
+            submitSeen = f[2] == "1",
+            entryAlertVisible = f[3] == "1",
+            entryAlertClass = dec(f[4]),
+            entryAlertText = dec(f[5]),
+            otherAlerts = others
+        )
+    }
+
+    private val DUPLICATE_RE = Regex("""already been (entered|submitted|used|registered)|duplicate""")
+    private val SUCCESS_PHRASES = listOf(
+        "has been accepted", "entry received", "successfully entered", "successfully submitted",
+        "entry confirmed", "thank you for your entry"
+    )
+    /** Words that turn a success phrase around ("has not been accepted", "unable to..."). */
+    private val NEGATION_RE = Regex("""\b(not|unable|failed|error|invalid|cannot|can't)\b""")
+    private val REJECT_PHRASES = listOf(
+        "please completely fill out", "ticket not entered", "invalid entry code", "entry code is invalid",
+        "not a valid", "is not eligible", "could not be processed", "daily entry limit", "please try again",
+        "not been accepted", "not accepted"
+    )
+    private val ERROR_CLASS_RE = Regex("""alert-danger|alert-warning|alert-error|\berror\b|\binvalid\b""")
+    private val SUCCESS_CLASS_RE = Regex("""alert-success|\bsuccess\b""")
+
+    /**
+     * Decides one message. [trustClass] is true only for `#entry-alert`, the box the site answers
+     * in: its red/green styling is part of the answer. Any other element needs matching words,
+     * because sites style banners (maintenance notices, rules) the same way.
+     */
+    fun classifyAnswer(text: String, cssClass: String, trustClass: Boolean): PortalResult {
+        val t = text.lowercase().trim()
+        if (t.isEmpty()) return PortalResult.UNKNOWN
+        val c = cssClass.lowercase()
+        if (t.contains(LOCKOUT_PHRASE)) return PortalResult.LOCKED
+        if (DUPLICATE_RE.containsMatchIn(t)) return PortalResult.DUPLICATE
+        val negated = NEGATION_RE.containsMatchIn(t)
+        if (SUCCESS_PHRASES.any { t.contains(it) } && !negated) return PortalResult.SUBMITTED
+        if (trustClass && ERROR_CLASS_RE.containsMatchIn(c)) return PortalResult.REJECTED
+        if (REJECT_PHRASES.any { t.contains(it) }) return PortalResult.REJECTED
+        // Green styling never outweighs words that say otherwise ("has not been accepted").
+        if (trustClass && !negated && SUCCESS_CLASS_RE.containsMatchIn(c)) return PortalResult.SUBMITTED
+        return PortalResult.UNKNOWN
+    }
+
+    /**
+     * The answer to the last entry. `#entry-alert` is authoritative when it is showing: the rest of
+     * the page is instructions and rules, which mention "not eligible", "daily entry limit" and the
+     * like, and must never overrule the site's actual answer. Without it, only visible alert-like
+     * elements are read, and conflicting ones give [PortalResult.UNKNOWN] rather than a guess.
+     */
+    fun classify(snapshot: PortalSnapshot): PortalResult {
+        if (snapshot.lockout) return PortalResult.LOCKED
+        if (snapshot.entryAlertVisible) {
+            return classifyAnswer(snapshot.entryAlertText, snapshot.entryAlertClass, trustClass = true)
+        }
+        val found = snapshot.otherAlerts
+            .map { classifyAnswer(it.second, it.first, trustClass = false) }
+            .filter { it != PortalResult.UNKNOWN }
+            .toSet()
+        return when {
+            PortalResult.LOCKED in found -> PortalResult.LOCKED
+            found.size == 1 -> found.single()
+            else -> PortalResult.UNKNOWN
+        }
+    }
 
     fun generateLoginScript(email: String, pass: String): String {
         val safeEmail = escapeJsString(email)
@@ -112,6 +222,9 @@ object SubmissionAutomationHelper {
      */
     /** Text the site shows after too many failed entry attempts (lowercase, matched in page text). */
     const val LOCKOUT_PHRASE = "exceeded the maximum number of unsuccessful"
+
+    /** Elements that can carry a message other than `#entry-alert` (read only as a fallback). */
+    private const val ALERT_SELECTOR = "[role=\"alert\"], .alert, .error-message, .invalid-feedback, .toast"
     const val DEFAULT_LOCKOUT_HOURS = 8
 
     /**
@@ -295,6 +408,17 @@ object SubmissionAutomationHelper {
                     // Note when Submit is pressed after this fill, so the result check can tell a
                     // fresh answer from a message that was already on the page.
                     window.__scSubmittedAt = 0;
+                    // Messages already on the page before this attempt (rules, notices, an older
+                    // answer) are never read as its answer by the fallback in the result check.
+                    window.__scAlertBaseline = (function() {
+                        var seenText = {};
+                        var nodes = document.querySelectorAll('$ALERT_SELECTOR');
+                        for (var b = 0; b < nodes.length; b++) {
+                            var bt = (nodes[b].innerText || nodes[b].textContent || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+                            if (bt) seenText[bt] = 1;
+                        }
+                        return seenText;
+                    })();
                     if (!window.__scHooked) {
                         window.__scHooked = true;
                         var markSubmit = function() { window.__scSubmittedAt = Date.now(); };
@@ -352,47 +476,40 @@ object SubmissionAutomationHelper {
         """.trimIndent()
     }
 
+    /**
+     * Reads what the page is showing after an entry, without deciding anything: whether the
+     * lockout sentence is visible, whether Submit was pressed since the last Auto-Fill, the
+     * `#entry-alert` box (class and text) and any other visible alert-like elements. Fields are
+     * URI-encoded and joined with `|` as `SC1|lock|seen|alertVisible|alertClass|alertText|others`.
+     * [classify] makes the decision.
+     */
     fun generateCheckSuccessScript(): String {
         return """
             (function() {
-                // Only the visible page text counts; FAQ answers in collapsed sections are ignored.
-                var bodyText = document.body ? (document.body.innerText || "").toLowerCase() : "";
-                var isDuplicate = bodyText.includes("already been entered") ||
-                                  bodyText.includes("already been submitted") ||
-                                  bodyText.includes("duplicate entry");
-                var isRejected = bodyText.includes("please completely fill out") ||
-                                 bodyText.includes("ticket not entered") ||
-                                 bodyText.includes("invalid entry code") ||
-                                 bodyText.includes("entry code is invalid") ||
-                                 bodyText.includes("not a valid") ||
-                                 bodyText.includes("is not eligible") ||
-                                 bodyText.includes("could not be processed") ||
-                                 bodyText.includes("daily entry limit");
-                var isSuccess = bodyText.includes("entry received") ||
-                                bodyText.includes("successfully entered") ||
-                                bodyText.includes("successfully submitted") ||
-                                bodyText.includes("entry confirmed") ||
-                                bodyText.includes("entry has been accepted") ||
-                                bodyText.includes("thank you for your entry");
-
-                // The live site shows every answer in #entry-alert: green "has been accepted" on
-                // success, a red alert-danger box with the reason otherwise.
-                var alertBox = document.getElementById('entry-alert');
-                var alertText = alertBox && alertBox.offsetWidth ? (alertBox.innerText || '').toLowerCase() : '';
-                var alertIsError = !!alertBox && /alert-danger|alert-warning/.test(alertBox.className || '');
-                if (alertText) {
-                    if (alertText.indexOf('has been accepted') >= 0) isSuccess = true;
-                    else if (/already been (entered|submitted|used|registered)|duplicate/.test(alertText)) isDuplicate = true;
-                    else if (alertIsError) isRejected = true;
+                function vis(el) { return !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length); }
+                function clean(t) { return (t || '').replace(/\s+/g, ' ').trim().slice(0, 400); }
+                function enc(s) { return encodeURIComponent(s || ''); }
+                function cls(el) { return (el.getAttribute && el.getAttribute('class')) || ''; }
+                var body = document.body ? (document.body.innerText || '').toLowerCase() : '';
+                var lock = body.indexOf('$LOCKOUT_PHRASE') >= 0 ? '1' : '0';
+                // Submit was pressed since the last Auto-Fill (and the page had a moment to answer).
+                var seen = (window.__scSubmittedAt && Date.now() - window.__scSubmittedAt > 1500) ? '1' : '0';
+                // The live site answers every entry in #entry-alert.
+                var a = document.getElementById('entry-alert');
+                var aText = vis(a) ? clean(a.innerText || a.textContent) : '';
+                // Fallback only: alerts that appeared after Auto-Fill. With no baseline (no fill
+                // this page) nothing is read, so page copy can never pass for an answer.
+                var others = [];
+                var base = window.__scAlertBaseline;
+                var nodes = base ? document.querySelectorAll('$ALERT_SELECTOR') : [];
+                for (var i = 0; i < nodes.length && others.length < 6; i++) {
+                    var n = nodes[i];
+                    if (a && (n === a || a.contains(n) || n.contains(a))) continue;
+                    if (!vis(n)) continue;
+                    var t = clean(n.innerText || n.textContent);
+                    if (t && !base[t]) others.push(enc(cls(n)) + ':' + enc(t));
                 }
-                // "|S": Submit was pressed since the last Auto-Fill (and the page had a moment to answer).
-                var seen = (window.__scSubmittedAt && Date.now() - window.__scSubmittedAt > 1500) ? "|S" : "";
-                if (bodyText.includes("$LOCKOUT_PHRASE")) return "LOCKED" + seen;
-                if (isDuplicate) return "DUPLICATE" + seen;
-                // An error on the page always wins over a success phrase elsewhere on it.
-                if (isRejected) return "REJECTED" + seen;
-                if (isSuccess) return "SUBMITTED" + seen;
-                return "PENDING";
+                return ['SC1', lock, seen, aText ? '1' : '0', enc(a ? cls(a) : ''), enc(aText), others.join(',')].join('|');
             })();
         """.trimIndent()
     }
