@@ -126,7 +126,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 title,
                 entryCode,
                 IllinoisLotteryGames.builtInActiveGames,
-                System.currentTimeMillis()
+                System.currentTimeMillis(),
+                IllinoisLotteryGames.activeGames
             )
         )
     }

@@ -178,6 +178,19 @@ class LearnedGamesTest {
     }
 
     @Test
+    fun `the learn button never takes a letter confirmed for another game`() {
+        // "F" is confirmed for 7676; a new game claiming it means a misread number or code.
+        val next = GameLearner.learnGame(
+            LearnedGamesState(), "7681", "", "F1234567890", builtIn, now = 5L, activeGames = IllinoisLotteryGames.activeGames
+        )
+        IllinoisLotteryGames.applyLearned(next)
+        assertTrue(IllinoisLotteryGames.findGameByNumber("7681")!!.isSecondChanceEligible)
+        assertNull(IllinoisLotteryGames.findGameByNumber("7681")!!.entryCodeLetter)
+        // Code-only lookups still find the original game.
+        assertEquals("7676", IllinoisLotteryGames.findGameByEntryCode("F1234567890")?.gameNumber)
+    }
+
+    @Test
     fun `a name the user typed survives sync`() {
         val typed = GameLearner.learnGame(LearnedGamesState(), "7681", "Frosty", null, builtIn, now = 5L)
         IllinoisLotteryGames.applyLearned(typed)

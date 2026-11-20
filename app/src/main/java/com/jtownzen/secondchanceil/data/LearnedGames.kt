@@ -182,11 +182,17 @@ object GameLearner {
         title: String,
         entryCode: String?,
         builtInActive: List<LotteryGame>,
-        now: Long
+        now: Long,
+        /** Games enterable now; a letter another of them has confirmed is never taken. */
+        activeGames: List<LotteryGame> = builtInActive
     ): LearnedGamesState {
         val number = gameNumber.trim()
         require(isGameNumber(number)) { "Game number must be 4 digits" }
-        val letter = entryCode?.let(::codeLetter)
+        // A letter confirmed for a different game means the number or the code is misread:
+        // learn the game, but not the letter, so code-only lookups keep working for both.
+        val letter = entryCode?.let(::codeLetter)?.takeUnless { l ->
+            activeGames.any { it.gameNumber != number && it.entryCodeLetterConfirmed && it.entryCodeLetter == l }
+        }
         if (number in builtInActive.map { it.gameNumber }) {
             // A built-in game the portal had retired: the user says it is enterable again.
             val s = state.copy(retiredBuiltIns = state.retiredBuiltIns - number)

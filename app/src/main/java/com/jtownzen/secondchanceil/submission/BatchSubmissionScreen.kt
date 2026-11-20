@@ -315,12 +315,19 @@ fun BatchSubmissionScreen(
     LaunchedEffect(gameListReadRequest) {
         if (gameListReadRequest == 0) return@LaunchedEffect
         val manual = manualGameSync
+        // The dropdown is script-built: accept it only once two reads a second apart agree, so a
+        // half-filled list can never retire the games that hadn't loaded yet.
         var list: PortalGameList? = null
-        for (attempt in 1..12) {
+        var previous: PortalGameList? = null
+        for (attempt in 1..15) {
             delay(1000L)
             val wv = webViewInstance ?: break
-            list = SubmissionAutomationHelper.parsePortalGameList(runJs(wv, SubmissionAutomationHelper.generateReadGameListScript()))
-            if (list != null) break
+            val read = SubmissionAutomationHelper.parsePortalGameList(runJs(wv, SubmissionAutomationHelper.generateReadGameListScript()))
+            if (read != null && read == previous) {
+                list = read
+                break
+            }
+            previous = read
         }
         manualGameSync = false
         val found = list
