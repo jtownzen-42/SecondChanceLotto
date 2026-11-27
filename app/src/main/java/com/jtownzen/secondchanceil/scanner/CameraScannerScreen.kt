@@ -121,6 +121,7 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -228,9 +229,12 @@ fun CameraScannerScreen(
     val textRecognizer = remember { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
     val useCases = remember { CameraUseCases() }
     var boundCameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    // Set when the scanner leaves the screen, so a camera that finishes starting late isn't bound.
+    val screenDisposed = remember { AtomicBoolean(false) }
 
     DisposableEffect(lifecycleOwner) {
         onDispose {
+            screenDisposed.set(true)
             try {
                 boundCameraProvider?.unbindAll()
             } catch (_: Exception) {
@@ -265,6 +269,7 @@ fun CameraScannerScreen(
 
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
                 cameraProviderFuture.addListener({
+                    if (screenDisposed.get()) return@addListener
                     val cameraProvider = cameraProviderFuture.get()
                     // Read the rotation now (not when the view was made), in case the phone turned meanwhile.
                     val rotation = hostView.display?.rotation ?: Surface.ROTATION_0
