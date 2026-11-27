@@ -683,7 +683,8 @@ fun BatchSubmissionScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        // The label takes what's left after the buttons, so the buttons never get pushed off the edge.
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                             Box(
                                 modifier = Modifier
                                     .size(10.dp)
@@ -692,7 +693,8 @@ fun BatchSubmissionScreen(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = if (pendingTickets.isNotEmpty()) {
-                                    "Queue: Ticket ${currentQueueIndex + 1} of ${pendingTickets.size}"
+                                    if (landscape) "Ticket ${currentQueueIndex + 1} of ${pendingTickets.size}"
+                                    else "Queue: Ticket ${currentQueueIndex + 1} of ${pendingTickets.size}"
                                 } else {
                                     "Batch Submission Complete"
                                 },

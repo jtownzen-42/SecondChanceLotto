@@ -262,11 +262,12 @@ fun CameraScannerScreen(
         AndroidView(
             factory = { ctx ->
                 val previewView = PreviewView(ctx)
-                val rotation = hostView.display?.rotation ?: Surface.ROTATION_0
 
                 val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
                 cameraProviderFuture.addListener({
                     val cameraProvider = cameraProviderFuture.get()
+                    // Read the rotation now (not when the view was made), in case the phone turned meanwhile.
+                    val rotation = hostView.display?.rotation ?: Surface.ROTATION_0
                     boundCameraProvider = cameraProvider
                     val preview = Preview.Builder().setTargetRotation(rotation).build().also {
                         it.surfaceProvider = previewView.surfaceProvider
@@ -339,15 +340,19 @@ fun CameraScannerScreen(
                         .fillMaxHeight()
                 ) {
                     cameraPreview(Modifier.fillMaxSize())
-                    // The frame sits where the scanner actually reads (the target region's share of the frame).
+                    // The frame sits where the scanner actually reads. The camera picture is 4:3 and the
+                    // preview fills this box by cropping its edges, so map the region through that crop.
                     val region = activeTargetRegion
+                    val shown = previewRegionRect(
+                        viewWidth = maxWidth.value,
+                        viewHeight = maxHeight.value,
+                        imageAspect = 4f / 3f,
+                        region = region
+                    )
                     Box(
                         modifier = Modifier
-                            .offset(x = maxWidth * region.leftFraction, y = maxHeight * region.topFraction)
-                            .size(
-                                width = maxWidth * (region.rightFraction - region.leftFraction),
-                                height = maxHeight * (region.bottomFraction - region.topFraction)
-                            )
+                            .offset(x = shown.left.dp, y = shown.top.dp)
+                            .size(width = (shown.right - shown.left).dp, height = (shown.bottom - shown.top).dp)
                     ) {
                         ViewfinderFrame(
                             detectedLiveCode = detectedLiveCode,
@@ -1267,4 +1272,35 @@ private suspend fun processImageUriWithTargetedRegion(
         Log.e("CameraScanner", "Failed to process photo uri", e)
         onComplete(ParsedLotteryData(), null)
     }
+}
+
+/** A rectangle in dp (left, top, right, bottom). */
+internal data class DpRect(val left: Float, val top: Float, val right: Float, val bottom: Float)
+
+/**
+ * Where [region] (fractions of the camera image) appears in a preview of [viewWidth] x [viewHeight]
+ * that fills its box by scaling an image of [imageAspect] (width / height) and cropping the overflow
+ * (PreviewView's default FILL_CENTER). The result is clipped to the visible box.
+ */
+internal fun previewRegionRect(viewWidth: Float, viewHeight: Float, imageAspect: Float, region: TargetRegion): DpRect {
+    if (viewWidth <= 0f || viewHeight <= 0f || imageAspect <= 0f) return DpRect(0f, 0f, 0f, 0f)
+    val viewAspect = viewWidth / viewHeight
+    // Size of the whole image once scaled to cover the view.
+    val shownWidth: Float
+    val shownHeight: Float
+    if (imageAspect > viewAspect) {
+        shownHeight = viewHeight
+        shownWidth = viewHeight * imageAspect
+    } else {
+        shownWidth = viewWidth
+        shownHeight = viewWidth / imageAspect
+    }
+    val offsetX = (viewWidth - shownWidth) / 2f
+    val offsetY = (viewHeight - shownHeight) / 2f
+    return DpRect(
+        left = (offsetX + region.leftFraction * shownWidth).coerceIn(0f, viewWidth),
+        top = (offsetY + region.topFraction * shownHeight).coerceIn(0f, viewHeight),
+        right = (offsetX + region.rightFraction * shownWidth).coerceIn(0f, viewWidth),
+        bottom = (offsetY + region.bottomFraction * shownHeight).coerceIn(0f, viewHeight)
+    )
 }
