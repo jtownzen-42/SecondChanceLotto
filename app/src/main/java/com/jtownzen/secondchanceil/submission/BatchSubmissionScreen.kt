@@ -25,6 +25,14 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.movableContentOf
+import com.jtownzen.secondchanceil.ui.StepBadge
+import com.jtownzen.secondchanceil.ui.StepState
+import com.jtownzen.secondchanceil.ui.isLandscape
+import com.jtownzen.secondchanceil.ui.stepStates
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -495,19 +503,175 @@ fun BatchSubmissionScreen(
         )
     }
 
+    // Step 1: fills the saved login into the official site's login form.
+    fun runAutoLogin() {
+        if (userPreferences.accountEmail.isBlank()) {
+            onConfigureCredentials()
+        } else {
+            val wv = webViewInstance
+            if (wv == null || !IllinoisLotteryGames.isAllowedPortalUrl(wv.url)) {
+                lastAutomationStatus = "BLOCKED: auto-login only runs on the official Illinois 2nd Chance site"
+                Toast.makeText(
+                    context,
+                    "Open the official Illinois 2nd Chance Login page before auto-filling credentials.",
+                    Toast.LENGTH_LONG
+                ).show()
+            } else {
+                val js = SubmissionAutomationHelper.generateLoginScript(
+                    userPreferences.accountEmail,
+                    userPreferences.accountPassword
+                )
+                wv.evaluateJavascript(js) { result ->
+                    val status = SubmissionAutomationHelper.unquoteJsString(result)
+                    lastAutomationStatus = status
+                    val message = if (status.startsWith("SUCCESS")) {
+                        "Attempting login with saved credentials"
+                    } else {
+                        status.ifEmpty { "Login fields not detected on current page" }
+                    }
+                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    val landscape = isLandscape()
+    // Which step is next: on the login page it's 1; after Auto-Fill (waiting for the site) it's 3; otherwise 2.
+    val currentSubmitStep = when {
+        currentWebUrl.contains("login", ignoreCase = true) -> 0
+        currentTicket != null && awaitingResultForTicketId == currentTicket.id -> 2
+        else -> 1
+    }
+    val submitStepStates = stepStates(3, currentSubmitStep)
+
     val currentPromotion = remember(currentTicket?.gameNumber) {
         currentTicket?.let { IllinoisLotteryGames.findGameByNumber(it.gameNumber)?.promotion }
     }
 
-    Box(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Column(modifier = Modifier.fillMaxSize()) {
+    // The page lives in movable content so turning the phone moves it instead of reloading it
+    // (a reload would lose the login and anything Auto-Fill typed).
+    val webContent = remember {
+        movableContentOf { webModifier: Modifier ->
+            AndroidView(
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        layoutParams = ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT
+                        )
 
-            // Top Automation Control HUD
+                        settings.apply {
+                            javaScriptEnabled = true
+                            domStorageEnabled = true
+                            allowFileAccess = false
+                            allowContentAccess = false
+                            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                            useWideViewPort = true
+                            loadWithOverviewMode = true
+                            cacheMode = WebSettings.LOAD_DEFAULT
+                            userAgentString = userAgentString.replace("; wv", "") // standard browser user-agent
+                        }
+
+                        CookieManager.getInstance().setAcceptCookie(true)
+                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
+                        webChromeClient = object : WebChromeClient() {
+                            override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                                pageLoadProgress = newProgress / 100f
+                                isPageLoading = newProgress < 100
+                            }
+                        }
+
+                        webViewClient = object : WebViewClient() {
+                            // Keep only the official Illinois 2nd Chance HTTPS site inside the
+                            // credentialed WebView; external links open in the device browser.
+                            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                val targetUrl = request?.url?.toString()
+                                val isMainFrame = request?.isForMainFrame ?: true
+                                if (!isMainFrame) {
+                                    val scheme = request?.url?.scheme?.lowercase()
+                                    return scheme != "https" && targetUrl != "about:blank"
+                                }
+                                val secure = IllinoisLotteryGames.upgradeToHttps(targetUrl)
+                                if (secure != null) {
+                                    view?.loadUrl(secure)
+                                    return true
+                                }
+                                if (IllinoisLotteryGames.isAllowedPortalUrl(targetUrl)) {
+                                    return false
+                                }
+                                if (IllinoisLotteryGames.isExternalHttpUrl(targetUrl)) {
+                                    try {
+                                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)))
+                                        Toast.makeText(ctx, "Opened external link in browser", Toast.LENGTH_SHORT).show()
+                                    } catch (_: Exception) {
+                                        Toast.makeText(ctx, "No browser available for external link", Toast.LENGTH_SHORT).show()
+                                    }
+                                    return true
+                                }
+                                return true
+                            }
+
+                            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                                val secure = IllinoisLotteryGames.upgradeToHttps(url)
+                                if (secure != null) {
+                                    view?.stopLoading()
+                                    view?.loadUrl(secure)
+                                    return
+                                }
+                                if (url != null && !IllinoisLotteryGames.isAllowedPortalUrl(url)) {
+                                    view?.stopLoading()
+                                    return
+                                }
+                                isPageLoading = true
+                                staleResultOnPage = null
+                                url?.let { currentWebUrl = it }
+                            }
+
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                isPageLoading = false
+                                url?.let { currentWebUrl = it }
+
+                                // Learn the portal's current game list from Enter Your Tickets.
+                                if (url != null && url.contains("/2ndchance/enter")) {
+                                    val now = System.currentTimeMillis()
+                                    if (manualGameSync || now - lastAutoGameSyncAt > 2 * 60_000L) {
+                                        lastAutoGameSyncAt = now
+                                        gameListReadRequest++
+                                    }
+                                } else if (manualGameSync && url != null && url.contains("login", ignoreCase = true)) {
+                                    manualGameSync = false
+                                    Toast.makeText(context, "Log in to the 2nd Chance Zone, then tap Update games again.", Toast.LENGTH_LONG).show()
+                                }
+
+                                // Check if user successfully submitted code via DOM inspection
+                                // Only acts on a ticket whose code we just injected, so reloading
+                                // a success page can't mark a different ticket as entered.
+                                val ticketId = awaitingResultForTicketId ?: return
+                                // Inconclusive results keep watching; the poll above gives up after ~30 s.
+                                evaluateJavascript(SubmissionAutomationHelper.generateCheckSuccessScript()) { result ->
+                                    latestHandlePortalResult(
+                                        ticketId,
+                                        SubmissionAutomationHelper.parsePortalResult(result),
+                                        SubmissionAutomationHelper.submitSeen(result),
+                                        SubmissionAutomationHelper.portalMessage(result)
+                                    )
+                                }
+                            }
+                        }
+
+                        loadUrl(IllinoisLotteryGames.SECOND_CHANCE_ZONE_URL)
+                        webViewInstance = this
+                    }
+                },
+                modifier = webModifier.testTag("lottery_webview")
+            )
+        }
+    }
+
+    val hud: @Composable (Modifier) -> Unit = { hudModifier ->
             Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp)
-                    .testTag("batch_automation_hud"),
+                modifier = hudModifier.testTag("batch_automation_hud"),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                 elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
                 shape = RoundedCornerShape(16.dp)
@@ -519,7 +683,8 @@ fun BatchSubmissionScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        // The label takes what's left after the buttons, so the buttons never get pushed off the edge.
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                             Box(
                                 modifier = Modifier
                                     .size(10.dp)
@@ -528,7 +693,8 @@ fun BatchSubmissionScreen(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = if (pendingTickets.isNotEmpty()) {
-                                    "Queue: Ticket ${currentQueueIndex + 1} of ${pendingTickets.size}"
+                                    if (landscape) "Ticket ${currentQueueIndex + 1} of ${pendingTickets.size}"
+                                    else "Queue: Ticket ${currentQueueIndex + 1} of ${pendingTickets.size}"
                                 } else {
                                     "Batch Submission Complete"
                                 },
@@ -665,110 +831,104 @@ fun BatchSubmissionScreen(
 
                                 Spacer(modifier = Modifier.height(10.dp))
 
-                                // Automation Action Buttons
-                                // Auto-Fill gets its own full-width row so its label never gets cut off,
-                                // even with large system font sizes.
-                                Button(
-                                    onClick = { startAutoFill(currentTicket) },
-                                    colors = ButtonDefaults.buttonColors(containerColor = LotteryEmerald),
+                                // The steps, in the order they are done: 1 log in, 2 Auto-Fill,
+                                // 3 the user taps the site's Submit Entry (Auto-Fill never submits).
+                                // The next step is the filled button; the others are outlined.
+                                val loginButton: @Composable (Modifier) -> Unit = { buttonModifier ->
+                                    StepActionButton(
+                                        number = 1,
+                                        label = "Log In",
+                                        state = submitStepStates[0],
+                                        onClick = ::runAutoLogin,
+                                        modifier = buttonModifier.testTag("auto_login_button")
+                                    ) {
+                                        Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                                val autoFillButton: @Composable (Modifier) -> Unit = { buttonModifier ->
+                                    StepActionButton(
+                                        number = 2,
+                                        label = "Auto-Fill Game & Code",
+                                        state = submitStepStates[1],
+                                        onClick = { startAutoFill(currentTicket) },
+                                        modifier = buttonModifier.testTag("auto_fill_code_button")
+                                    ) {
+                                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    }
+                                }
+
+                                if (landscape) {
+                                    loginButton(Modifier.fillMaxWidth())
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    autoFillButton(Modifier.fillMaxWidth())
+                                } else {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        loginButton(Modifier.weight(0.8f))
+                                        autoFillButton(Modifier.weight(1.2f))
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(8.dp))
+
+                                // Step 3 is on the website itself, so it's an instruction, not a button.
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .heightIn(min = 44.dp)
-                                        .testTag("auto_fill_code_button")
+                                        .then(
+                                            if (submitStepStates[2] == StepState.CURRENT) {
+                                                Modifier.border(1.5.dp, LuckyGold, RoundedCornerShape(10.dp))
+                                            } else {
+                                                Modifier
+                                            }
+                                        )
+                                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                                        .testTag("submit_step_three")
                                 ) {
-                                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                    StepBadge(number = 3, state = submitStepStates[2], size = 22)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = if (landscape) "Tap Submit Entry on the page" else "Tap Submit Entry on the page below",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = if (submitStepStates[2] == StepState.CURRENT) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                        if (submitStepStates[2] == StepState.CURRENT) {
+                                            Text(
+                                                text = "Check the code matches your ticket first. The next ticket loads when the site accepts it.",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // Fallback for when the site accepted it but the app didn't see the message.
+                                TextButton(
+                                    onClick = { confirmManualEntryFor = currentTicket },
+                                    contentPadding = PaddingValues(horizontal = 8.dp),
+                                    modifier = Modifier.testTag("mark_submitted_button")
+                                ) {
+                                    Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
                                     Text(
-                                        "Auto-Fill Game & Code",
-                                        color = Color.Black,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp,
+                                        "Site accepted it? Mark entered & next",
+                                        fontSize = 12.sp,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }
 
-                                Spacer(modifier = Modifier.height(8.dp))
-
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-
-                                    // Auto-Login
-                                    OutlinedButton(
-                                        onClick = {
-                                            if (userPreferences.accountEmail.isBlank()) {
-                                                onConfigureCredentials()
-                                            } else {
-                                                val wv = webViewInstance
-                                                if (wv == null || !IllinoisLotteryGames.isAllowedPortalUrl(wv.url)) {
-                                                    lastAutomationStatus = "BLOCKED: auto-login only runs on the official Illinois 2nd Chance site"
-                                                    Toast.makeText(
-                                                        context,
-                                                        "Open the official Illinois 2nd Chance Login page before auto-filling credentials.",
-                                                        Toast.LENGTH_LONG
-                                                    ).show()
-                                                } else {
-                                                    val js = SubmissionAutomationHelper.generateLoginScript(
-                                                        userPreferences.accountEmail,
-                                                        userPreferences.accountPassword
-                                                    )
-                                                    wv.evaluateJavascript(js) { result ->
-                                                        val status = SubmissionAutomationHelper.unquoteJsString(result)
-                                                        lastAutomationStatus = status
-                                                        val message = if (status.startsWith("SUCCESS")) {
-                                                            "Attempting login with saved credentials"
-                                                        } else {
-                                                            status.ifEmpty { "Login fields not detected on current page" }
-                                                        }
-                                                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        contentPadding = PaddingValues(horizontal = 10.dp),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .heightIn(min = 44.dp)
-                                            .testTag("auto_login_button")
-                                    ) {
-                                        Icon(Icons.Default.Key, contentDescription = null, tint = LuckyGold, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("Log In", fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    }
-
-                                    // Mark Submitted & Advance
-                                    Button(
-                                        onClick = { confirmManualEntryFor = currentTicket },
-                                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary),
-                                        contentPadding = PaddingValues(horizontal = 10.dp),
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .heightIn(min = 44.dp)
-                                            .testTag("mark_submitted_button")
-                                    ) {
-                                        Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color.Black, modifier = Modifier.size(16.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text(
-                                            "Confirm & Next",
-                                            color = Color.Black,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 12.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                }
-
                                 if (lastAutomationStatus != null) {
-                                    Spacer(modifier = Modifier.height(6.dp))
                                     Text(
                                         text = lastAutomationStatus ?: "",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = if (lastAutomationStatus?.let { it.startsWith("ENTERED") || it.startsWith("WAITING") || it.startsWith("FILLED") } == true) LotteryEmerald else LuckyGold,
                                         fontFamily = FontFamily.Monospace,
-                                        maxLines = 1
+                                        maxLines = if (landscape) 4 else 1
                                     )
                                 }
                             } else {
@@ -909,8 +1069,9 @@ fun BatchSubmissionScreen(
                     }
                 }
             }
+    }
 
-            // Page Loading Bar
+    val loadingBar: @Composable () -> Unit = {
             if (isPageLoading && pageLoadProgress < 1.0f) {
                 LinearProgressIndicator(
                     progress = { pageLoadProgress },
@@ -918,125 +1079,81 @@ fun BatchSubmissionScreen(
                     color = LotteryEmerald
                 )
             }
+    }
 
-            // Embedded WebView
-            AndroidView(
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.MATCH_PARENT
-                        )
-
-                        settings.apply {
-                            javaScriptEnabled = true
-                            domStorageEnabled = true
-                            allowFileAccess = false
-                            allowContentAccess = false
-                            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                            useWideViewPort = true
-                            loadWithOverviewMode = true
-                            cacheMode = WebSettings.LOAD_DEFAULT
-                            userAgentString = userAgentString.replace("; wv", "") // standard browser user-agent
-                        }
-
-                        CookieManager.getInstance().setAcceptCookie(true)
-                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-
-                        webChromeClient = object : WebChromeClient() {
-                            override fun onProgressChanged(view: WebView?, newProgress: Int) {
-                                pageLoadProgress = newProgress / 100f
-                                isPageLoading = newProgress < 100
-                            }
-                        }
-
-                        webViewClient = object : WebViewClient() {
-                            // Keep only the official Illinois 2nd Chance HTTPS site inside the
-                            // credentialed WebView; external links open in the device browser.
-                            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                                val targetUrl = request?.url?.toString()
-                                val isMainFrame = request?.isForMainFrame ?: true
-                                if (!isMainFrame) {
-                                    val scheme = request?.url?.scheme?.lowercase()
-                                    return scheme != "https" && targetUrl != "about:blank"
-                                }
-                                val secure = IllinoisLotteryGames.upgradeToHttps(targetUrl)
-                                if (secure != null) {
-                                    view?.loadUrl(secure)
-                                    return true
-                                }
-                                if (IllinoisLotteryGames.isAllowedPortalUrl(targetUrl)) {
-                                    return false
-                                }
-                                if (IllinoisLotteryGames.isExternalHttpUrl(targetUrl)) {
-                                    try {
-                                        ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)))
-                                        Toast.makeText(ctx, "Opened external link in browser", Toast.LENGTH_SHORT).show()
-                                    } catch (_: Exception) {
-                                        Toast.makeText(ctx, "No browser available for external link", Toast.LENGTH_SHORT).show()
-                                    }
-                                    return true
-                                }
-                                return true
-                            }
-
-                            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                                val secure = IllinoisLotteryGames.upgradeToHttps(url)
-                                if (secure != null) {
-                                    view?.stopLoading()
-                                    view?.loadUrl(secure)
-                                    return
-                                }
-                                if (url != null && !IllinoisLotteryGames.isAllowedPortalUrl(url)) {
-                                    view?.stopLoading()
-                                    return
-                                }
-                                isPageLoading = true
-                                staleResultOnPage = null
-                                url?.let { currentWebUrl = it }
-                            }
-
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                isPageLoading = false
-                                url?.let { currentWebUrl = it }
-
-                                // Learn the portal's current game list from Enter Your Tickets.
-                                if (url != null && url.contains("/2ndchance/enter")) {
-                                    val now = System.currentTimeMillis()
-                                    if (manualGameSync || now - lastAutoGameSyncAt > 2 * 60_000L) {
-                                        lastAutoGameSyncAt = now
-                                        gameListReadRequest++
-                                    }
-                                } else if (manualGameSync && url != null && url.contains("login", ignoreCase = true)) {
-                                    manualGameSync = false
-                                    Toast.makeText(context, "Log in to the 2nd Chance Zone, then tap Update games again.", Toast.LENGTH_LONG).show()
-                                }
-
-                                // Check if user successfully submitted code via DOM inspection
-                                // Only acts on a ticket whose code we just injected, so reloading
-                                // a success page can't mark a different ticket as entered.
-                                val ticketId = awaitingResultForTicketId ?: return
-                                // Inconclusive results keep watching; the poll above gives up after ~30 s.
-                                evaluateJavascript(SubmissionAutomationHelper.generateCheckSuccessScript()) { result ->
-                                    latestHandlePortalResult(
-                                        ticketId,
-                                        SubmissionAutomationHelper.parsePortalResult(result),
-                                        SubmissionAutomationHelper.submitSeen(result),
-                                        SubmissionAutomationHelper.portalMessage(result)
-                                    )
-                                }
-                            }
-                        }
-
-                        loadUrl(IllinoisLotteryGames.SECOND_CHANCE_ZONE_URL)
-                        webViewInstance = this
-                    }
-                },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .weight(1f)
-                    .testTag("lottery_webview")
-            )
+    Box(modifier = modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        if (landscape) {
+            // Landscape: the website on the left, the steps in a column on the right.
+            Row(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                ) {
+                    loadingBar()
+                    webContent(Modifier.fillMaxSize())
+                }
+                Column(
+                    modifier = Modifier
+                        .width(320.dp)
+                        .fillMaxHeight()
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    hud(Modifier.fillMaxWidth().padding(8.dp))
+                }
+            }
+        } else {
+            Column(modifier = Modifier.fillMaxSize()) {
+                hud(Modifier.fillMaxWidth().padding(8.dp))
+                loadingBar()
+                webContent(
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                )
+            }
         }
+    }
+}
+
+/**
+ * A numbered step button. The step to do next is a filled green button; a step that is done
+ * or not yet due is outlined, so the eye goes to the right button first.
+ */
+@Composable
+private fun StepActionButton(
+    number: Int,
+    label: String,
+    state: StepState,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    icon: @Composable () -> Unit
+) {
+    val content: @Composable () -> Unit = {
+        StepBadge(number = number, state = state, size = 20)
+        Spacer(modifier = Modifier.width(6.dp))
+        icon()
+        Spacer(modifier = Modifier.width(4.dp))
+        Text(
+            label,
+            fontWeight = FontWeight.Bold,
+            fontSize = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+    if (state == StepState.CURRENT) {
+        Button(
+            onClick = onClick,
+            colors = ButtonDefaults.buttonColors(containerColor = LotteryEmerald, contentColor = Color.Black),
+            contentPadding = PaddingValues(horizontal = 10.dp),
+            modifier = modifier.heightIn(min = 48.dp)
+        ) { content() }
+    } else {
+        OutlinedButton(
+            onClick = onClick,
+            contentPadding = PaddingValues(horizontal = 10.dp),
+            modifier = modifier.heightIn(min = 48.dp)
+        ) { content() }
     }
 }
