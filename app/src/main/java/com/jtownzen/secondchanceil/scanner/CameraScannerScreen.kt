@@ -9,6 +9,20 @@ import android.graphics.Matrix
 import android.media.ExifInterface
 import android.net.Uri
 import android.util.Log
+import android.hardware.display.DisplayManager
+import android.os.Handler
+import android.os.Looper
+import android.view.Surface
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
+import androidx.compose.ui.platform.LocalView
+import com.jtownzen.secondchanceil.ui.FlowStep
+import com.jtownzen.secondchanceil.ui.HorizontalStepStrip
+import com.jtownzen.secondchanceil.ui.VerticalStepList
+import com.jtownzen.secondchanceil.ui.isLandscape
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.OptIn
@@ -45,6 +59,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -81,6 +96,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -109,6 +125,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/** Holds the bound camera use cases so their rotation can follow the phone. */
+private class CameraUseCases {
+    var preview: Preview? = null
+    var analysis: ImageAnalysis? = null
+}
+
+/** The scan flow, in the order it is done. */
+private val SCAN_STEPS = listOf(
+    FlowStep("Aim", "Hold the ENTRY CODE (1 letter + 10 digits) inside the box"),
+    FlowStep("Capture", "Code found. Tap the green Capture button"),
+    FlowStep("Check & add", "Fix anything wrong, then add it to the queue")
+)
+
 @kotlin.OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CameraScannerScreen(
@@ -120,7 +149,9 @@ fun CameraScannerScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val hostView = LocalView.current
     val coroutineScope = rememberCoroutineScope()
+    val landscape = isLandscape()
 
     var hasCameraPermission by remember {
         mutableStateOf(
@@ -151,6 +182,13 @@ fun CameraScannerScreen(
     val shouldAnalyzeFrames by rememberUpdatedState(!showReviewSheet && !isProcessing)
     val currentTargetRegion by rememberUpdatedState(activeTargetRegion)
 
+    // Which step of the scan flow is next: aim, capture, then check & add.
+    val currentScanStep = when {
+        showReviewSheet || isProcessing -> 2
+        detectedLiveCode != null -> 1
+        else -> 0
+    }
+
     // Photo picker launcher for gallery tickets
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -169,143 +207,217 @@ fun CameraScannerScreen(
             }
         }
     }
+    val pickPhoto: () -> Unit = { photoPickerLauncher.launch("image/*") }
 
-    Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
-        if (hasCameraPermission) {
-            val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
-            val textRecognizer = remember { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
-            var boundCameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
-
-            DisposableEffect(lifecycleOwner) {
-                onDispose {
-                    try {
-                        boundCameraProvider?.unbindAll()
-                    } catch (_: Exception) {
-                    }
-                    cameraExecutor.shutdown()
-                    textRecognizer.close()
-                }
-            }
-
-            // Live Camera View with ML Kit Text Recognition targeting the 2nd chance entry code zone
-            AndroidView(
-                factory = { ctx ->
-                    val previewView = PreviewView(ctx)
-
-                    val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
-                    cameraProviderFuture.addListener({
-                        val cameraProvider = cameraProviderFuture.get()
-                        boundCameraProvider = cameraProvider
-                        val preview = Preview.Builder().build().also {
-                            it.surfaceProvider = previewView.surfaceProvider
-                        }
-
-                        val imageAnalysis = ImageAnalysis.Builder()
-                            .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                            .build()
-
-                        imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                            if (!shouldAnalyzeFrames) {
-                                imageProxy.close()
-                                return@setAnalyzer
-                            }
-                            processCameraFrameForEntryCode(
-                                imageProxy = imageProxy,
-                                textRecognizer = textRecognizer,
-                                targetRegion = currentTargetRegion
-                            ) { parsed ->
-                                if (parsed.targetedRegionText.isNotBlank()) {
-                                    targetedZoneSnippet = parsed.targetedRegionText
-                                        .lines()
-                                        .firstOrNull { it.isNotBlank() }
-                                }
-                                if (parsed.entryCode.isNotEmpty()) {
-                                    detectedLiveCode = parsed.entryCode
-                                    if (!showReviewSheet) {
-                                        parsedCandidate = parsed
-                                    }
-                                }
-                            }
-                        }
-
-                        try {
-                            cameraProvider.unbindAll()
-                            cameraProvider.bindToLifecycle(
-                                lifecycleOwner,
-                                CameraSelector.DEFAULT_BACK_CAMERA,
-                                preview,
-                                imageAnalysis
-                            )
-                        } catch (e: Exception) {
-                            Log.e("CameraScanner", "Camera binding failed", e)
-                        }
-                    }, ContextCompat.getMainExecutor(ctx))
-
-                    previewView
-                },
-                modifier = Modifier.fillMaxSize().testTag("camera_preview_view")
+    val captureTicket: () -> Unit = {
+        deleteUnsavedPhotoFile(context, capturedImageUri)
+        capturedImageUri = null
+        if (parsedCandidate == null) {
+            // Nothing recognized yet: open the review sheet empty so the
+            // code is typed in, rather than pre-filling a made-up one.
+            parsedCandidate = ParsedLotteryData(
+                entryCode = detectedLiveCode ?: "",
+                isConfident = detectedLiveCode != null
             )
-        } else {
-            // Permission Denied / Alternative View
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.CameraAlt,
-                    contentDescription = null,
-                    tint = LotteryEmerald,
-                    modifier = Modifier.size(64.dp)
-                )
-                Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "Camera Access Required",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Grant camera permission to point-and-scan your instant lottery scratch-off ticket and second-chance codes.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.LightGray,
-                    textAlign = TextAlign.Center
-                )
-                Spacer(modifier = Modifier.height(24.dp))
-                Button(
-                    onClick = { permissionLauncher.launch(Manifest.permission.CAMERA) },
-                    colors = ButtonDefaults.buttonColors(containerColor = LotteryEmerald),
-                    modifier = Modifier.testTag("request_camera_perm_button")
-                ) {
-                    Text("Grant Permission", color = Color.Black, fontWeight = FontWeight.Bold)
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = { photoPickerLauncher.launch("image/*") },
-                    modifier = Modifier.testTag("pick_photo_fallback_button")
-                ) {
-                    Icon(Icons.Default.Image, contentDescription = null, tint = LotteryEmerald)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Select Ticket from Photos", color = Color.White)
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-                Button(
-                    onClick = onManualEntryRequested,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    modifier = Modifier.testTag("manual_entry_fallback_button")
-                ) {
-                    Icon(Icons.Default.Edit, contentDescription = null, tint = LuckyGold)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Enter Code Manually", color = Color.White)
-                }
+        }
+        showReviewSheet = true
+    }
+
+    // Camera resources live as long as the screen, so turning the phone only re-binds the preview.
+    val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
+    val textRecognizer = remember { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
+    val useCases = remember { CameraUseCases() }
+    var boundCameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+
+    DisposableEffect(lifecycleOwner) {
+        onDispose {
+            try {
+                boundCameraProvider?.unbindAll()
+            } catch (_: Exception) {
+            }
+            cameraExecutor.shutdown()
+            textRecognizer.close()
+        }
+    }
+
+    // Keep the analyzed frames upright when the phone turns, including a straight flip from one
+    // landscape side to the other (which doesn't change the layout, so nothing else notices it).
+    DisposableEffect(hostView) {
+        val displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) {}
+            override fun onDisplayRemoved(displayId: Int) {}
+            override fun onDisplayChanged(displayId: Int) {
+                val rotation = hostView.display?.rotation ?: return
+                useCases.preview?.targetRotation = rotation
+                useCases.analysis?.targetRotation = rotation
             }
         }
+        displayManager?.registerDisplayListener(listener, Handler(Looper.getMainLooper()))
+        onDispose { displayManager?.unregisterDisplayListener(listener) }
+    }
 
-        // Viewfinder Alignment Overlay & Targeted Entry Code Bounding Box
-        if (hasCameraPermission) {
+    // Live Camera View with ML Kit Text Recognition targeting the 2nd chance entry code zone
+    val cameraPreview: @Composable (Modifier) -> Unit = { previewModifier ->
+        AndroidView(
+            factory = { ctx ->
+                val previewView = PreviewView(ctx)
+                val rotation = hostView.display?.rotation ?: Surface.ROTATION_0
+
+                val cameraProviderFuture = ProcessCameraProvider.getInstance(ctx)
+                cameraProviderFuture.addListener({
+                    val cameraProvider = cameraProviderFuture.get()
+                    boundCameraProvider = cameraProvider
+                    val preview = Preview.Builder().setTargetRotation(rotation).build().also {
+                        it.surfaceProvider = previewView.surfaceProvider
+                    }
+
+                    val imageAnalysis = ImageAnalysis.Builder()
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .setTargetRotation(rotation)
+                        .build()
+
+                    imageAnalysis.setAnalyzer(cameraExecutor) { imageProxy ->
+                        if (!shouldAnalyzeFrames) {
+                            imageProxy.close()
+                            return@setAnalyzer
+                        }
+                        processCameraFrameForEntryCode(
+                            imageProxy = imageProxy,
+                            textRecognizer = textRecognizer,
+                            targetRegion = currentTargetRegion
+                        ) { parsed ->
+                            if (parsed.targetedRegionText.isNotBlank()) {
+                                targetedZoneSnippet = parsed.targetedRegionText
+                                    .lines()
+                                    .firstOrNull { it.isNotBlank() }
+                            }
+                            if (parsed.entryCode.isNotEmpty()) {
+                                detectedLiveCode = parsed.entryCode
+                                if (!showReviewSheet) {
+                                    parsedCandidate = parsed
+                                }
+                            }
+                        }
+                    }
+
+                    try {
+                        cameraProvider.unbindAll()
+                        cameraProvider.bindToLifecycle(
+                            lifecycleOwner,
+                            CameraSelector.DEFAULT_BACK_CAMERA,
+                            preview,
+                            imageAnalysis
+                        )
+                        useCases.preview = preview
+                        useCases.analysis = imageAnalysis
+                    } catch (e: Exception) {
+                        Log.e("CameraScanner", "Camera binding failed", e)
+                    }
+                }, ContextCompat.getMainExecutor(ctx))
+
+                previewView
+            },
+            modifier = previewModifier.testTag("camera_preview_view")
+        )
+    }
+
+    Box(modifier = modifier.fillMaxSize().background(Color.Black)) {
+        if (!hasCameraPermission) {
+            CameraPermissionPanel(
+                onGrant = { permissionLauncher.launch(Manifest.permission.CAMERA) },
+                onPickPhoto = pickPhoto,
+                onManualEntry = onManualEntryRequested
+            )
+        } else if (landscape) {
+            // Landscape: camera on the left, the steps and buttons in a column on the right,
+            // so the ticket stays in view and the thumb reaches Capture.
+            Row(modifier = Modifier.fillMaxSize()) {
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                ) {
+                    cameraPreview(Modifier.fillMaxSize())
+                    // The frame sits where the scanner actually reads (the target region's share of the frame).
+                    val region = activeTargetRegion
+                    Box(
+                        modifier = Modifier
+                            .offset(x = maxWidth * region.leftFraction, y = maxHeight * region.topFraction)
+                            .size(
+                                width = maxWidth * (region.rightFraction - region.leftFraction),
+                                height = maxHeight * (region.bottomFraction - region.topFraction)
+                            )
+                    ) {
+                        ViewfinderFrame(
+                            detectedLiveCode = detectedLiveCode,
+                            targetedZoneSnippet = targetedZoneSnippet,
+                            compact = true,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .width(280.dp)
+                        .fillMaxHeight()
+                        .background(Color.Black.copy(alpha = 0.92f))
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                        .testTag("scanner_landscape_panel")
+                ) {
+                    Text(
+                        text = "Scan a ticket",
+                        color = Color.White,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    VerticalStepList(
+                        steps = SCAN_STEPS,
+                        currentIndex = currentScanStep,
+                        textColor = Color.White
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    CaptureButton(
+                        highlighted = currentScanStep == 1,
+                        wide = true,
+                        onClick = captureTicket
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = pickPhoto,
+                            contentPadding = PaddingValues(horizontal = 8.dp),
+                            modifier = Modifier.weight(1f).testTag("gallery_picker_button")
+                        ) {
+                            Icon(Icons.Default.Image, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Photo", color = Color.White, maxLines = 1)
+                        }
+                        OutlinedButton(
+                            onClick = onManualEntryRequested,
+                            contentPadding = PaddingValues(horizontal = 8.dp),
+                            modifier = Modifier.weight(1f).testTag("manual_entry_icon_button")
+                        ) {
+                            Icon(Icons.Default.Edit, contentDescription = null, tint = LuckyGold, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Type it", color = Color.White, maxLines = 1)
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Read from:",
+                        color = Color.LightGray,
+                        style = MaterialTheme.typography.labelMedium
+                    )
+                    ZoneChips(active = activeTargetRegion, onSelect = { activeTargetRegion = it })
+                }
+            }
+        } else {
+            cameraPreview(Modifier.fillMaxSize())
+
             // Top Region Selector Strip
             Row(
                 modifier = Modifier
@@ -325,37 +437,13 @@ fun CameraScannerScreen(
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "OCR Target Zone:",
+                        text = "Read from:",
                         color = Color.White,
                         style = MaterialTheme.typography.labelMedium,
                         fontWeight = FontWeight.Bold
                     )
                 }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = activeTargetRegion == TargetRegion.VIEWFINDER_CODE_BOX,
-                        onClick = { activeTargetRegion = TargetRegion.VIEWFINDER_CODE_BOX },
-                        label = { Text("Code Box", fontSize = 11.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = LotteryEmerald,
-                            selectedLabelColor = Color.Black,
-                            labelColor = Color.White
-                        ),
-                        modifier = Modifier.testTag("roi_center_box_chip")
-                    )
-                    FilterChip(
-                        selected = activeTargetRegion == TargetRegion.TICKET_LOWER_SCRATCH_ZONE,
-                        onClick = { activeTargetRegion = TargetRegion.TICKET_LOWER_SCRATCH_ZONE },
-                        label = { Text("Lower Ticket Area", fontSize = 11.sp) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = LuckyGold,
-                            selectedLabelColor = Color.Black,
-                            labelColor = Color.White
-                        ),
-                        modifier = Modifier.testTag("roi_lower_zone_chip")
-                    )
-                }
+                ZoneChips(active = activeTargetRegion, onSelect = { activeTargetRegion = it })
             }
 
             Box(
@@ -368,95 +456,17 @@ fun CameraScannerScreen(
                     Alignment.Center
                 }
             ) {
-                // Scratch-off entry code target frame
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = "ML Kit Target: ${activeTargetRegion.label}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = Color.White.copy(alpha = 0.95f),
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(12.dp))
-                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    ViewfinderFrame(
+                        detectedLiveCode = detectedLiveCode,
+                        targetedZoneSnippet = targetedZoneSnippet,
+                        compact = false,
+                        modifier = Modifier.fillMaxWidth().height(170.dp)
                     )
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(170.dp)
-                            .border(
-                                width = 2.5.dp,
-                                color = if (detectedLiveCode != null) LotteryEmerald else LuckyGold,
-                                shape = RoundedCornerShape(16.dp)
-                            )
-                            .background(Color.Black.copy(alpha = 0.2f), RoundedCornerShape(16.dp))
-                            .testTag("viewfinder_frame"),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (detectedLiveCode != null) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.padding(12.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.CheckCircle,
-                                    contentDescription = null,
-                                    tint = LotteryEmerald,
-                                    modifier = Modifier.size(36.dp)
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = "Entry Code: $detectedLiveCode",
-                                    color = Color.White,
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 15.sp
-                                )
-                                if (!targetedZoneSnippet.isNullOrBlank()) {
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = "Zone OCR: $targetedZoneSnippet",
-                                        color = LotteryEmerald,
-                                        fontSize = 11.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        } else {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier.padding(16.dp)
-                            ) {
-                                Text(
-                                    text = "Position the 2nd Chance Entry Code\ninside this target zone",
-                                    color = Color.White.copy(alpha = 0.85f),
-                                    textAlign = TextAlign.Center,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                if (!targetedZoneSnippet.isNullOrBlank()) {
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                    Text(
-                                        text = "Scanning: $targetedZoneSnippet",
-                                        color = LuckyGold,
-                                        fontFamily = FontFamily.Monospace,
-                                        fontSize = 11.sp,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        }
-                    }
-
                     Spacer(modifier = Modifier.height(12.dp))
-
                     Text(
                         text = "Targeting the ENTRY CODE (1 letter + 10 digits) under the scratch-off",
                         color = Color.LightGray.copy(alpha = 0.85f),
@@ -466,22 +476,28 @@ fun CameraScannerScreen(
                 }
             }
 
-            // Bottom Controls Bar
-            Box(
+            // Bottom: the steps, then the buttons (Capture in the middle).
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .align(Alignment.BottomCenter)
                     .background(Color.Black.copy(alpha = 0.75f))
-                    .padding(horizontal = 24.dp, vertical = 20.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
             ) {
+                HorizontalStepStrip(
+                    steps = SCAN_STEPS,
+                    currentIndex = currentScanStep,
+                    textColor = Color.White,
+                    modifier = Modifier.fillMaxWidth().testTag("scan_step_strip")
+                )
+                Spacer(modifier = Modifier.height(12.dp))
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Pick from Gallery
                     IconButton(
-                        onClick = { photoPickerLauncher.launch("image/*") },
+                        onClick = pickPhoto,
                         modifier = Modifier
                             .background(Color.White.copy(alpha = 0.15f), CircleShape)
                             .size(52.dp)
@@ -494,38 +510,12 @@ fun CameraScannerScreen(
                         )
                     }
 
-                    // Primary Capture / Freeze Button
-                    Button(
-                        onClick = {
-                            deleteUnsavedPhotoFile(context, capturedImageUri)
-                            capturedImageUri = null
-                            if (parsedCandidate != null) {
-                                showReviewSheet = true
-                            } else {
-                                // Nothing recognized yet: open the review sheet empty so the
-                                // code is typed in, rather than pre-filling a made-up one.
-                                parsedCandidate = ParsedLotteryData(
-                                    entryCode = detectedLiveCode ?: "",
-                                    isConfident = detectedLiveCode != null
-                                )
-                                showReviewSheet = true
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = LotteryEmerald),
-                        shape = CircleShape,
-                        modifier = Modifier
-                            .size(72.dp)
-                            .testTag("snap_ticket_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CameraAlt,
-                            contentDescription = "Capture Ticket",
-                            tint = Color.Black,
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
+                    CaptureButton(
+                        highlighted = currentScanStep == 1,
+                        wide = false,
+                        onClick = captureTicket
+                    )
 
-                    // Manual Entry Button
                     IconButton(
                         onClick = onManualEntryRequested,
                         modifier = Modifier
@@ -574,10 +564,220 @@ fun CameraScannerScreen(
                     showReviewSheet = false
                     capturedImageUri = null
                     detectedLiveCode = null
+                    targetedZoneSnippet = null
                     parsedCandidate = null
                     onTicketSaved(ticket)
                 }
             )
+        }
+    }
+}
+
+/** Shown when the camera isn't allowed: grant it, or add the ticket another way. */
+@Composable
+private fun CameraPermissionPanel(onGrant: () -> Unit, onPickPhoto: () -> Unit, onManualEntry: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.CameraAlt,
+            contentDescription = null,
+            tint = LotteryEmerald,
+            modifier = Modifier.size(64.dp)
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "Camera Access Required",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "Grant camera permission to point-and-scan your instant lottery scratch-off ticket and second-chance codes.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color.LightGray,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        Button(
+            onClick = onGrant,
+            colors = ButtonDefaults.buttonColors(containerColor = LotteryEmerald),
+            modifier = Modifier.testTag("request_camera_perm_button")
+        ) {
+            Text("Grant Permission", color = Color.Black, fontWeight = FontWeight.Bold)
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedButton(
+            onClick = onPickPhoto,
+            modifier = Modifier.testTag("pick_photo_fallback_button")
+        ) {
+            Icon(Icons.Default.Image, contentDescription = null, tint = LotteryEmerald)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Select Ticket from Photos", color = Color.White)
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        Button(
+            onClick = onManualEntry,
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+            modifier = Modifier.testTag("manual_entry_fallback_button")
+        ) {
+            Icon(Icons.Default.Edit, contentDescription = null, tint = LuckyGold)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Enter Code Manually", color = Color.White)
+        }
+    }
+}
+
+/** Picks which part of the picture the scanner reads the code from. */
+@Composable
+private fun ZoneChips(active: TargetRegion, onSelect: (TargetRegion) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FilterChip(
+            selected = active == TargetRegion.VIEWFINDER_CODE_BOX,
+            onClick = { onSelect(TargetRegion.VIEWFINDER_CODE_BOX) },
+            label = { Text("Code Box", fontSize = 11.sp) },
+            colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = LotteryEmerald,
+                selectedLabelColor = Color.Black,
+                labelColor = Color.White
+            ),
+            modifier = Modifier.testTag("roi_center_box_chip")
+        )
+        FilterChip(
+            selected = active == TargetRegion.TICKET_LOWER_SCRATCH_ZONE,
+            onClick = { onSelect(TargetRegion.TICKET_LOWER_SCRATCH_ZONE) },
+            label = { Text("Lower Ticket Area", fontSize = 11.sp) },
+            colors = FilterChipDefaults.filterChipColors(
+                selectedContainerColor = LuckyGold,
+                selectedLabelColor = Color.Black,
+                labelColor = Color.White
+            ),
+            modifier = Modifier.testTag("roi_lower_zone_chip")
+        )
+    }
+}
+
+/** The Capture button. It gets a gold ring once a code is in view, because that's the next step. */
+@Composable
+private fun CaptureButton(highlighted: Boolean, wide: Boolean, onClick: () -> Unit) {
+    val ring = if (highlighted) Modifier.border(3.dp, LuckyGold, CircleShape).padding(5.dp) else Modifier.padding(8.dp)
+    if (wide) {
+        Button(
+            onClick = onClick,
+            colors = ButtonDefaults.buttonColors(containerColor = LotteryEmerald),
+            shape = RoundedCornerShape(32.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (highlighted) Modifier.border(3.dp, LuckyGold, RoundedCornerShape(36.dp)).padding(5.dp) else Modifier.padding(8.dp))
+                .heightIn(min = 60.dp)
+                .testTag("snap_ticket_button")
+        ) {
+            Icon(Icons.Default.CameraAlt, contentDescription = null, tint = Color.Black, modifier = Modifier.size(26.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Capture", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        }
+    } else {
+        Box(modifier = ring) {
+            Button(
+                onClick = onClick,
+                colors = ButtonDefaults.buttonColors(containerColor = LotteryEmerald),
+                shape = CircleShape,
+                modifier = Modifier
+                    .size(72.dp)
+                    .testTag("snap_ticket_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CameraAlt,
+                    contentDescription = "Capture Ticket",
+                    tint = Color.Black,
+                    modifier = Modifier.size(32.dp)
+                )
+            }
+        }
+    }
+}
+
+/** The box the entry code goes in: gold while looking, green with the code once it's read. */
+@Composable
+private fun ViewfinderFrame(
+    detectedLiveCode: String?,
+    targetedZoneSnippet: String?,
+    compact: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .border(
+                width = 2.5.dp,
+                color = if (detectedLiveCode != null) LotteryEmerald else LuckyGold,
+                shape = RoundedCornerShape(16.dp)
+            )
+            .background(Color.Black.copy(alpha = 0.2f), RoundedCornerShape(16.dp))
+            .testTag("viewfinder_frame"),
+        contentAlignment = Alignment.Center
+    ) {
+        if (detectedLiveCode != null) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(if (compact) 6.dp else 12.dp)
+            ) {
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = LotteryEmerald,
+                    modifier = Modifier.size(if (compact) 24.dp else 36.dp)
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Entry Code: $detectedLiveCode",
+                    color = Color.White,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    modifier = Modifier.background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp)
+                )
+                if (!compact && !targetedZoneSnippet.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Zone OCR: $targetedZoneSnippet",
+                        color = LotteryEmerald,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        } else {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(if (compact) 6.dp else 16.dp)
+            ) {
+                Text(
+                    text = if (compact) "Put the ENTRY CODE in this box" else "Position the 2nd Chance Entry Code\ninside this target zone",
+                    color = Color.White.copy(alpha = 0.85f),
+                    textAlign = TextAlign.Center,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.background(Color.Black.copy(alpha = 0.45f), RoundedCornerShape(6.dp)).padding(horizontal = 6.dp)
+                )
+                if (!targetedZoneSnippet.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Scanning: $targetedZoneSnippet",
+                        color = LuckyGold,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
         }
     }
 }
@@ -607,18 +807,16 @@ fun TicketReviewSheet(
     var gameDropdownExpanded by remember { mutableStateOf(false) }
     var confirmUnusualCode by remember { mutableStateOf(false) }
 
+    val landscape = isLandscape()
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface
+        containerColor = MaterialTheme.colorScheme.surface,
+        // In landscape use the whole width, so the two columns below fit side by side.
+        sheetMaxWidth = if (landscape) Dp.Unspecified else BottomSheetDefaults.SheetMaxWidth
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp)
-                .padding(bottom = 32.dp)
-                .verticalScroll(rememberScrollState())
-        ) {
+        val headerSection: @Composable () -> Unit = {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -640,9 +838,8 @@ fun TicketReviewSheet(
                     Icon(Icons.Default.Close, contentDescription = "Close")
                 }
             }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
+        }
+        val photoSection: @Composable () -> Unit = {
             // Photo Preview if available
             if (photoUri != null) {
                 Box(
@@ -660,7 +857,8 @@ fun TicketReviewSheet(
                 }
                 Spacer(modifier = Modifier.height(16.dp))
             }
-
+        }
+        val codeSection: @Composable () -> Unit = {
             // Entry Code Input (Highest Priority). The scan's warning stays until the user edits the code.
             EntryCodeField(
                 value = entryCode,
@@ -676,6 +874,8 @@ fun TicketReviewSheet(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+        }
+        val gameSection: @Composable () -> Unit = {
             // Game Selection Dropdown
             Box(modifier = Modifier.fillMaxWidth()) {
                 val knownGame = remember(selectedGameNumber, learnedGames) {
@@ -768,6 +968,8 @@ fun TicketReviewSheet(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+        }
+        val detailsSection: @Composable () -> Unit = {
             // Pack & Ticket Number Row
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
@@ -796,9 +998,8 @@ fun TicketReviewSheet(
                 placeholder = { Text("e.g., Gas station purchase, gift") },
                 singleLine = true
             )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
+        }
+        val saveSection: @Composable () -> Unit = {
             val saveTicket = {
                 val ticket = LotteryTicket(
                     gameNumber = selectedGameNumber,
@@ -840,7 +1041,78 @@ fun TicketReviewSheet(
                 )
             }
         }
+
+        if (landscape) {
+            // Landscape: what must be right (code, game) on the left; the extras and the
+            // Add button on the right, so Add is on screen without scrolling past everything.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp)
+                    .padding(bottom = 16.dp)
+            ) {
+                headerSection()
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        ReviewStepLabel("1. Check the entry code and game")
+                        codeSection()
+                        gameSection()
+                    }
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        ReviewStepLabel("2. Add it to the queue")
+                        saveSection()
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text(
+                            text = "Optional",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        detailsSection()
+                        Spacer(modifier = Modifier.height(12.dp))
+                        photoSection()
+                    }
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp)
+                    .padding(bottom = 32.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                headerSection()
+                Spacer(modifier = Modifier.height(16.dp))
+                photoSection()
+                codeSection()
+                gameSection()
+                detailsSection()
+                Spacer(modifier = Modifier.height(24.dp))
+                saveSection()
+            }
+        }
     }
+}
+
+@Composable
+private fun ReviewStepLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.Bold,
+        color = LuckyGold,
+        modifier = Modifier.padding(bottom = 8.dp)
+    )
 }
 
 /**

@@ -8,6 +8,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -31,6 +33,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
@@ -58,6 +63,7 @@ import com.jtownzen.secondchanceil.ui.DashboardScreen
 import com.jtownzen.secondchanceil.ui.MainViewModel
 import com.jtownzen.secondchanceil.ui.ManualEntryDialog
 import com.jtownzen.secondchanceil.ui.TicketVaultScreen
+import com.jtownzen.secondchanceil.ui.isLandscape
 import com.jtownzen.secondchanceil.ui.theme.LotteryEmerald
 import com.jtownzen.secondchanceil.ui.theme.LuckyGold
 import com.jtownzen.secondchanceil.ui.theme.MyApplicationTheme
@@ -98,161 +104,167 @@ fun SecondChanceApp(
         }
     }
 
+    val landscape = isLandscape()
+
+    val topBarActions: @Composable () -> Unit = {
+        // Account Credentials Button
+        IconButton(
+            onClick = { showAccountSettingsDialog = true },
+            modifier = Modifier.testTag("top_bar_account_button")
+        ) {
+            Box(contentAlignment = Alignment.TopEnd) {
+                Icon(
+                    imageVector = Icons.Default.Key,
+                    contentDescription = "Account Settings",
+                    tint = if (userPreferences.accountEmail.isNotBlank()) LotteryEmerald else LuckyGold
+                )
+                if (userPreferences.accountEmail.isNotBlank()) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(LotteryEmerald, CircleShape)
+                    )
+                }
+            }
+        }
+
+        // Quick Add Ticket
+        IconButton(
+            onClick = {
+                manualEntryInitialGame = if (currentTab == AppTab.VAULT) filterGameNumber else null
+                showManualEntryDialog = true
+            },
+            modifier = Modifier.testTag("top_bar_add_ticket_button")
+        ) {
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = "Add Ticket Manually",
+                tint = LotteryEmerald
+            )
+        }
+    }
+
+    // The tabs, in the order the work is done: scan tickets, then submit them.
+    val navTabs = listOf(
+        NavTab(AppTab.DASHBOARD, "Dashboard", "nav_tab_dashboard") {
+            Icon(Icons.Default.Dashboard, contentDescription = "Dashboard")
+        },
+        NavTab(AppTab.SCANNER, "Scan", "nav_tab_scanner") {
+            Icon(Icons.Default.CameraAlt, contentDescription = "Scanner")
+        },
+        NavTab(AppTab.SUBMISSION, "Submit", "nav_tab_submission") {
+            BadgedBox(
+                badge = {
+                    if (pendingTickets.isNotEmpty()) {
+                        Badge(containerColor = LuckyGold, contentColor = Color.Black) {
+                            Text(pendingTickets.size.toString())
+                        }
+                    }
+                }
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Submit Batch")
+            }
+        },
+        NavTab(AppTab.VAULT, "Vault", "nav_tab_vault") {
+            BadgedBox(
+                badge = {
+                    if (allTickets.isNotEmpty()) {
+                        Badge(containerColor = MaterialTheme.colorScheme.surfaceVariant) {
+                            Text(allTickets.size.toString())
+                        }
+                    }
+                }
+            ) {
+                Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = "Vault")
+            }
+        }
+    )
+
     Scaffold(
         contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
-            CenterAlignedTopAppBar(
-                title = {
-                    Text(
-                        text = when (currentTab) {
-                            AppTab.DASHBOARD -> "SecondChance IL"
-                            AppTab.SCANNER -> "Scan Instant Ticket"
-                            AppTab.SUBMISSION -> "Batch Submitter"
-                            AppTab.VAULT -> "Ticket Vault"
-                        },
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 0.5.sp
-                    )
-                },
-                actions = {
-                    // Account Credentials Button
-                    IconButton(
-                        onClick = { showAccountSettingsDialog = true },
-                        modifier = Modifier.testTag("top_bar_account_button")
-                    ) {
-                        Box(contentAlignment = Alignment.TopEnd) {
-                            Icon(
-                                imageVector = Icons.Default.Key,
-                                contentDescription = "Account Settings",
-                                tint = if (userPreferences.accountEmail.isNotBlank()) LotteryEmerald else LuckyGold
-                            )
-                            if (userPreferences.accountEmail.isNotBlank()) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .background(LotteryEmerald, CircleShape)
-                                )
-                            }
-                        }
-                    }
-
-                    // Quick Add Ticket
-                    IconButton(
-                        onClick = {
-                            manualEntryInitialGame = if (currentTab == AppTab.VAULT) filterGameNumber else null
-                            showManualEntryDialog = true
-                        },
-                        modifier = Modifier.testTag("top_bar_add_ticket_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Add,
-                            contentDescription = "Add Ticket Manually",
-                            tint = LotteryEmerald
+            // In landscape the title bar would eat a third of the height; its buttons move to the side rail.
+            if (!landscape) {
+                CenterAlignedTopAppBar(
+                    title = {
+                        Text(
+                            text = when (currentTab) {
+                                AppTab.DASHBOARD -> "SecondChance IL"
+                                AppTab.SCANNER -> "Scan Instant Ticket"
+                                AppTab.SUBMISSION -> "Batch Submitter"
+                                AppTab.VAULT -> "Ticket Vault"
+                            },
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = 0.5.sp
                         )
-                    }
-                },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                    },
+                    actions = { topBarActions() },
+                    colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        titleContentColor = MaterialTheme.colorScheme.onSurface
+                    )
                 )
-            )
+            }
         },
         bottomBar = {
-            NavigationBar(
-                containerColor = MaterialTheme.colorScheme.surface,
-                modifier = Modifier.testTag("bottom_nav_bar")
-            ) {
-                // Dashboard Tab
-                NavigationBarItem(
-                    selected = currentTab == AppTab.DASHBOARD,
-                    onClick = { viewModel.setTab(AppTab.DASHBOARD) },
-                    icon = {
-                        Icon(Icons.Default.Dashboard, contentDescription = "Dashboard")
-                    },
-                    label = { Text("Dashboard") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.Black,
-                        selectedTextColor = LotteryEmerald,
-                        indicatorColor = LotteryEmerald
-                    ),
-                    modifier = Modifier.testTag("nav_tab_dashboard")
-                )
-
-                // Scanner Tab
-                NavigationBarItem(
-                    selected = currentTab == AppTab.SCANNER,
-                    onClick = { viewModel.setTab(AppTab.SCANNER) },
-                    icon = {
-                        Icon(Icons.Default.CameraAlt, contentDescription = "Scanner")
-                    },
-                    label = { Text("Scan") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.Black,
-                        selectedTextColor = LotteryEmerald,
-                        indicatorColor = LotteryEmerald
-                    ),
-                    modifier = Modifier.testTag("nav_tab_scanner")
-                )
-
-                // Submit Batch Tab
-                NavigationBarItem(
-                    selected = currentTab == AppTab.SUBMISSION,
-                    onClick = { viewModel.setTab(AppTab.SUBMISSION) },
-                    icon = {
-                        BadgedBox(
-                            badge = {
-                                if (pendingTickets.isNotEmpty()) {
-                                    Badge(containerColor = LuckyGold, contentColor = Color.Black) {
-                                        Text(pendingTickets.size.toString())
-                                    }
-                                }
-                            }
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Submit Batch")
-                        }
-                    },
-                    label = { Text("Submit") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.Black,
-                        selectedTextColor = LotteryEmerald,
-                        indicatorColor = LotteryEmerald
-                    ),
-                    modifier = Modifier.testTag("nav_tab_submission")
-                )
-
-                // Ticket Vault Tab
-                NavigationBarItem(
-                    selected = currentTab == AppTab.VAULT,
-                    onClick = { viewModel.setTab(AppTab.VAULT) },
-                    icon = {
-                        BadgedBox(
-                            badge = {
-                                if (allTickets.isNotEmpty()) {
-                                    Badge(containerColor = MaterialTheme.colorScheme.surfaceVariant) {
-                                        Text(allTickets.size.toString())
-                                    }
-                                }
-                            }
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = "Vault")
-                        }
-                    },
-                    label = { Text("Vault") },
-                    colors = NavigationBarItemDefaults.colors(
-                        selectedIconColor = Color.Black,
-                        selectedTextColor = LotteryEmerald,
-                        indicatorColor = LotteryEmerald
-                    ),
-                    modifier = Modifier.testTag("nav_tab_vault")
-                )
+            if (!landscape) {
+                NavigationBar(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    modifier = Modifier.testTag("bottom_nav_bar")
+                ) {
+                    navTabs.forEach { nav ->
+                        NavigationBarItem(
+                            selected = currentTab == nav.tab,
+                            onClick = { viewModel.setTab(nav.tab) },
+                            icon = nav.icon,
+                            label = { Text(nav.label) },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = Color.Black,
+                                selectedTextColor = LotteryEmerald,
+                                indicatorColor = LotteryEmerald
+                            ),
+                            modifier = Modifier.testTag(nav.testTag)
+                        )
+                    }
+                }
             }
         }
     ) { innerPadding ->
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+        ) {
+            if (landscape) {
+                // Landscape: tabs down the left edge, leaving the full height for the screen.
+                NavigationRail(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    header = {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) { topBarActions() }
+                    },
+                    modifier = Modifier.testTag("side_nav_rail")
+                ) {
+                    navTabs.forEach { nav ->
+                        NavigationRailItem(
+                            selected = currentTab == nav.tab,
+                            onClick = { viewModel.setTab(nav.tab) },
+                            icon = nav.icon,
+                            label = { Text(nav.label) },
+                            colors = NavigationRailItemDefaults.colors(
+                                selectedIconColor = Color.Black,
+                                selectedTextColor = LotteryEmerald,
+                                indicatorColor = LotteryEmerald
+                            ),
+                            modifier = Modifier.testTag(nav.testTag)
+                        )
+                    }
+                }
+            }
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxSize()
         ) {
             when (currentTab) {
                 AppTab.DASHBOARD -> {
@@ -275,8 +287,8 @@ fun SecondChanceApp(
                         onTicketSaved = { ticket ->
                             viewModel.saveTicket(ticket) { saved ->
                                 if (saved) {
-                                    Toast.makeText(context, "Ticket added to batch queue!", Toast.LENGTH_SHORT).show()
-                                    viewModel.setTab(AppTab.DASHBOARD)
+                                    // Stay on the scanner so the next ticket can be scanned right away.
+                                    Toast.makeText(context, "Added to the Submit queue. Scan the next ticket.", Toast.LENGTH_SHORT).show()
                                 } else {
                                     Toast.makeText(context, "That entry code is already in your vault", Toast.LENGTH_LONG).show()
                                 }
@@ -328,6 +340,7 @@ fun SecondChanceApp(
                 }
             }
         }
+        }
 
         // Manual Entry Dialog
         if (showManualEntryDialog) {
@@ -365,3 +378,11 @@ fun SecondChanceApp(
         }
     }
 }
+
+/** One tab of the app's navigation (bottom bar in portrait, side rail in landscape). */
+private class NavTab(
+    val tab: AppTab,
+    val label: String,
+    val testTag: String,
+    val icon: @Composable () -> Unit
+)
