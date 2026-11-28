@@ -139,8 +139,9 @@ keytool -genkeypair -v -keystore debug.keystore -storepass android -alias androi
 Open the folder in Android Studio and run the `app` configuration on a device or emulator.
 A camera is needed for scanning; manual entry works without one.
 
-There is no Gradle wrapper checked in — Android Studio supplies Gradle, and CI pins 9.3.1. To
-build from a terminal instead, install Gradle 9.3.1 and run `gradle assembleDebug`.
+The Gradle wrapper is checked in, so Android Studio, CI and the terminal all use the same
+Gradle (9.3.1). From a terminal in the project folder, on Windows: `gradlew.bat assembleDebug`.
+The first run downloads Gradle 9.3.1. The APK lands in `app\build\outputs\apk\debug\`.
 
 Copy `.env.example` to `.env` if you are building the Firebase-backed variants.
 

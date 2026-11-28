@@ -18,10 +18,11 @@ jobs:
 
       # The runner already provides the Android SDK; AGP downloads the required platform.
 
-      # The repository has no gradlew yet, so use the Gradle version pinned in wrapper properties.
+      # Fails the build unless gradle-wrapper.jar matches one of Gradle's published checksums.
+      - uses: gradle/actions/wrapper-validation@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
+
+      # Builds with the checked-in wrapper, so CI uses the same Gradle as gradlew on a PC.
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
-        with:
-          gradle-version: 9.3.1
 
       - name: Create debug keystore
         run: >
@@ -30,13 +31,13 @@ jobs:
           -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
 
       - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: Android Lint
-        run: gradle lintDebug --stacktrace
+        run: ./gradlew lintDebug --stacktrace
 
       - name: Unit tests
-        run: gradle testDebugUnitTest
+        run: ./gradlew testDebugUnitTest
 
       - name: Verify minified release build (R8)
         env:
@@ -47,7 +48,7 @@ jobs:
           keytool -genkeypair -v -keystore "$KEYSTORE_PATH" -storepass "$STORE_PASSWORD" \
             -alias upload -keypass "$KEY_PASSWORD" -keyalg RSA -keysize 2048 \
             -validity 100 -dname "CN=CI Verify,O=CI,C=US"
-          gradle assembleRelease --stacktrace
+          ./gradlew assembleRelease --stacktrace
 
       - name: Upload test reports
         if: always()
