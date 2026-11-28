@@ -1,0 +1,4 @@
+# Gradle wrapper: Windows script needs CRLF, the Unix script LF, the jar is binary.
+*.bat text eol=crlf
+gradlew text eol=lf
+*.jar binary
